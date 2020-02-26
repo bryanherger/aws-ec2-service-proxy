@@ -10,9 +10,9 @@ import software.amazon.awssdk.services.ec2.model.StartInstancesRequest;
 import software.amazon.awssdk.services.ec2.model.StopInstancesRequest;
 
 public class AwsUtil {
-    private static String awsAccessKeyID = "AKIAXCEX6CDH62DAV4SJ"
-            , awsSecretAccessKey = "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"
-            , awsRegion = "us-east-1";
+    private static String awsAccessKeyID = ""
+            , awsSecretAccessKey = ""
+            , awsRegion = "";
     private static Ec2Client ec2 = null;
 
     public static void init() {
