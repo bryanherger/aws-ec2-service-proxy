@@ -1,7 +1,7 @@
 # aws-ec2-service-proxy
 A TCP proxy to help manage services running on EC2 instances and control costs by running and stopping on demand.
 ### This is a work in progress
-This is meant a best as example code or a Proof Of Concept and will likely require considerable tailoring and testing for your application.
+This is meant a best as example code or a Proof Of Concept and will likely require considerable tailoring and testing for your application.  BSD 3-clause license applies; see LICENSE in the repo.
 ### Why?
 Cloud economics offers cost-effective storage and pay-as-you-go compute.  To maximize savings and efficiency, you want to use as little resources as possible.  Compute is far more expensive over time, so this means you need to size your environment to your application and you also need some tooling to run compute resources only when needed.  You could use a scheduler to stop and start during business hours but this might be too coarse and over time will cost extra.
 
