@@ -114,12 +114,13 @@ public class ThreadProxy extends Thread {
         }
         LOG.info("Finished ProxyThread");
         Util.threadDump(); Util.td();
-        if (Util.lastProxyThread()) {
+        // the scheduler handles this now
+        /*if (Util.lastProxyThread()) {
             LOG.info("Last ProxyThread, stopping instance");
             VerticaUtil.checkIfActive(SERVER_URL);
             String instanceId = "i-0496825e4f6bfcfb4";
             Main.testHibernateInstance(instanceId);
-        }
+        }*/
         LOG.info("Exiting ProxyThread");
     }
 }

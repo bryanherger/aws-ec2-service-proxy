@@ -41,4 +41,20 @@ public class Util {
         }
         return (count > 1 ? false : true);
     }
+
+    public static int countProxyThreads() {
+        ThreadGroup currentGroup = Thread.currentThread().getThreadGroup();
+        int noThreads = currentGroup.activeCount();
+        Thread[] lstThreads = new Thread[noThreads];
+        currentGroup.enumerate(lstThreads);
+        int count = 0;
+        for (int i = 0; i < noThreads; i++) {
+            System.out.println("Thread No:" + i + " = " + lstThreads[i].getName());
+            if (lstThreads[i].getName().contains("ProxyThread-")) {
+                System.out.println("*** proxy thread");
+                count++;
+            }
+        }
+        return count;
+    }
 }
