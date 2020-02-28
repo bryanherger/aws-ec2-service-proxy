@@ -24,8 +24,8 @@ public class MonitorJob implements Job {
             idleCount++;
             if (idleCount > 2) {
                 LOG.info("All ProxyThread stopped for three checks, stopping instance");
-                String instanceId = "i-0496825e4f6bfcfb4";
-                Main.testHibernateInstance(instanceId);
+                AwsUtil.testHibernateInstances();
+                latch = false;
             }
         }
     }

@@ -5,6 +5,8 @@ import org.apache.log4j.Logger;
 
 import java.io.*;
 import java.net.Socket;
+import java.util.Collections;
+import java.util.List;
 
 /**
  * Handles a socket connection to the proxy server from the client and uses 2
@@ -36,15 +38,16 @@ public class ThreadProxy extends Thread {
             final InputStream inFromClient = sClient.getInputStream();
             final OutputStream outToClient = sClient.getOutputStream();
             Socket client = null, server = null;
-            String instanceId = "i-0496825e4f6bfcfb4";
+            String instanceId = SERVER_URL;
+            List<String> instanceIds = Collections.singletonList(instanceId);
             // connects a socket to the server
             try {
                 System.out.println("Checking whether to wake server");
-                String sts = AwsUtil.getInstanceState(instanceId);
-                if (sts.contains("stop")) {
-                    Main.testStartInstance(instanceId);
+                List<String> sts = AwsUtil.getInstanceState(instanceIds);
+                if (sts.get(0).contains("stop")) {
+                    AwsUtil.testStartInstances();
                 }
-                SERVER_URL = AwsUtil.getInstancePublicDns(instanceId);
+                SERVER_URL = AwsUtil.getInstancePublicDns(instanceIds);
                 int count = 15;
                 while (VerticaUtil.checkIfAlive(SERVER_URL) == false) {
                     count--;

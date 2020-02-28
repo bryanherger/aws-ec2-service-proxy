@@ -75,4 +75,33 @@ public class VerticaUtil {
         }
     }
 
+    public static boolean testVertica(String hostname, int count) throws InterruptedException {
+        long stm = System.currentTimeMillis();
+        Thread.sleep(5000);
+        while (count > 0) {
+            System.out.println(">>> count: "+count+"");
+            if (VerticaUtil.checkIfAlive(hostname)) {
+                break;
+            }
+            count--;
+            Thread.sleep(5000);
+        }
+        System.out.println("testVertica: Time (ms) to test Vertica: "+(System.currentTimeMillis()-stm)+", success = "+(count>0));
+        return (count > 0);
+    }
+
+    public static boolean testVerticaNodes(String hostname, int count) throws InterruptedException {
+        long stm = System.currentTimeMillis();
+        Thread.sleep(5000);
+        while (count > 0) {
+            System.out.println(">>> count: "+count+"");
+            if (VerticaUtil.checkIfAlive(hostname) && VerticaUtil.checkNodes(hostname)) {
+                break;
+            }
+            count--;
+            Thread.sleep(5000);
+        }
+        System.out.println("testVerticaNodes: Time (ms) to test Vertica: "+(System.currentTimeMillis()-stm)+", success = "+(count>0));
+        return (count > 0);
+    }
 }
