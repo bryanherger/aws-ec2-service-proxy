@@ -7,6 +7,8 @@ import org.apache.log4j.Logger;
 import org.apache.log4j.Level;
 
 import java.net.ServerSocket;
+import java.util.ArrayList;
+import java.util.List;
 
 public class Main {
     final static Logger LOG = LogManager.getLogger(LogUtil.class);
@@ -23,13 +25,15 @@ public class Main {
         rootLogger.addAppender(new ConsoleAppender(layout));
 
         // run test(s)
-        proxyTestSuite();
+        //awsTestSuite();
+        awsClusterTestSuite();
+        //proxyTestSuite();
     }
 
     public static void awsTestSuite() throws Exception {
         AwsUtil.init();
         //AwsUtil.describeEC2Instances();
-        String instanceId = "i-0496825e4f6bfcfb4";
+        String instanceId = "X";
         AwsUtil.describeInstance(instanceId);
         LOG.info("Current state: "+AwsUtil.getInstanceState(instanceId));
         testInstanceState(instanceId, "stopped");
@@ -37,6 +41,27 @@ public class Main {
         testVertica(AwsUtil.getInstancePublicDns(instanceId), 30);
         //testInstanceState(instanceId, "running");
         testHibernateInstance(instanceId);
+        //testInstanceState(instanceId, "hibernate");
+    }
+
+    public static void awsClusterTestSuite() throws Exception {
+        AwsUtil.init();
+        List<String> instanceIds = new ArrayList<>();
+        instanceIds.add("X");
+        instanceIds.add("X");
+        instanceIds.add("X");
+        //AwsUtil.describeInstances(instanceIds);
+        testStartInstances(instanceIds);
+        testVerticaNodes(AwsUtil.getInstancePublicDns(instanceIds), 30);
+        testHibernateInstances(instanceIds);
+        //AwsUtil.hibernateInstances(instanceIds);
+        //AwsUtil.describeInstances(instanceIds);
+        //LOG.info("Current state: "+AwsUtil.getInstanceState(instanceId));
+        //testInstanceState(instanceId, "stopped");
+        //testStartInstance(instanceIds);
+        //testVertica(AwsUtil.getInstancePublicDns(instanceIds.get(0)), 30);
+        //testInstanceState(instanceId, "running");
+        //testHibernateInstance(instanceIds);
         //testInstanceState(instanceId, "hibernate");
     }
 
@@ -66,6 +91,17 @@ public class Main {
         try { testInstanceState(instanceId, "stopped"); } catch (Exception e) { }
     }
 
+    public static void testStartInstances(List<String> instanceIds) {
+        AwsUtil.startInstances(instanceIds);
+        try { testInstanceState(instanceIds, "running", 30); } catch (Exception e) { }
+    }
+
+    public static void testHibernateInstances(List<String> instanceIds) {
+        AwsUtil.hibernateInstances(instanceIds);
+        try { testInstanceState(instanceIds, "hibernate", 30); } catch (Exception e) { }
+        try { testInstanceState(instanceIds, "stopped", 30); } catch (Exception e) { }
+    }
+
     public static void testInstanceState(String instanceId, String targetState) throws InterruptedException {
         testInstanceState(instanceId, targetState, 30);
     }
@@ -85,12 +121,48 @@ public class Main {
         System.out.println("Time (ms) to transition to "+targetState+": "+(System.currentTimeMillis()-stm));
     }
 
+    public static void testInstanceState(List<String> instanceIds, String targetState, int count) throws InterruptedException {
+        long stm = System.currentTimeMillis();
+        Thread.sleep(5000);
+        while (count > 0) {
+            List<String> sts = AwsUtil.getInstanceState(instanceIds);
+            System.out.println(">>> count: "+count+" states: "+sts.toString()+", target: "+targetState);
+            int stc = 0;
+            for (String st : sts) {
+                if (st.contains(targetState)) {
+                    stc++;
+                }
+            }
+            System.out.println(""+stc+"=="+instanceIds.size());
+            if (stc == instanceIds.size()) {
+                break;
+            }
+            count--;
+            Thread.sleep(5000);
+        }
+        System.out.println("Time (ms) to transition to "+targetState+": "+(System.currentTimeMillis()-stm));
+    }
+
     public static void testVertica(String hostname, int count) throws InterruptedException {
         long stm = System.currentTimeMillis();
         Thread.sleep(5000);
         while (count > 0) {
             System.out.println(">>> count: "+count+"");
             if (VerticaUtil.checkIfAlive(hostname)) {
+                break;
+            }
+            count--;
+            Thread.sleep(5000);
+        }
+        System.out.println("Time (ms) to test Vertica: "+(System.currentTimeMillis()-stm));
+    }
+
+    public static void testVerticaNodes(String hostname, int count) throws InterruptedException {
+        long stm = System.currentTimeMillis();
+        Thread.sleep(5000);
+        while (count > 0) {
+            System.out.println(">>> count: "+count+"");
+            if (VerticaUtil.checkIfAlive(hostname) && VerticaUtil.checkNodes(hostname)) {
                 break;
             }
             count--;
