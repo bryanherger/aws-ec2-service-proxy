@@ -10,6 +10,9 @@ import org.quartz.*;
 import org.quartz.impl.StdSchedulerFactory;
 import software.amazon.awssdk.utils.StringUtils;
 
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileWriter;
 import java.io.InputStream;
 import java.net.ServerSocket;
 import java.util.ArrayList;
@@ -62,7 +65,8 @@ public class AwsVerticaDemo {
         try { Thread.sleep(10000L); } catch (Exception e) { }
         LOG.info("Using public IP (last node): "+publicIp);
         try {
-            verticaOnSpot(publicIp, String.join(",", ips));
+            params.setProperty("eonMode","true");
+            verticaOnSpot(params, publicIp, String.join(",", ips));
         } catch (Exception e) {
             LOG.error(e.getMessage(), e);
         }
@@ -152,47 +156,69 @@ public class AwsVerticaDemo {
         return count;
     }
 
-    public static void verticaOnSpot(String publicIp, String allIp) throws Exception {
+    public static void verticaOnSpot(Properties params, String publicIp, String allIp) throws Exception {
         String install_vertica = "sudo /opt/vertica/sbin/install_vertica -i /tmp/keyfile.pem --debug --license CE --accept-eula --hosts "+allIp+" --dba-user-password-disabled --failure-threshold NONE --no-system-configuration";
-        String create_db = "sudo -u dbadmin /opt/vertica/bin/admintools -t create_db --skip-fs-checks -s "+allIp+" -d spotdb -p Vertica1";
+        String create_db = "sudo -u dbadmin /opt/vertica/bin/admintools -t create_db --skip-fs-checks -s "+allIp+" -d "+DBNAME+" -p "+DBPASS;
+        // for Eon mode, we also need to upload a credential file
         LOG.info("Will use node "+publicIp+" to install Vertica on "+allIp);
         JSch jsch = new JSch();
-        Session jschSession = jsch.getSession("dbadmin", publicIp);
+        Session jschSession = jsch.getSession(DBUSER, publicIp);
         java.util.Properties config = new java.util.Properties();
+        // ignore host key since it changes for each new AWS instance
         config.put("StrictHostKeyChecking", "no");
         jschSession.setConfig(config);
-        String localFile = "keyfile.pem";
+        // set key file
+        String localFile = VERTICA_PEM_KEYFILE;
         jsch.addIdentity(localFile);
-        //jschSession.set
         jschSession.connect();
         ChannelSftp csftp = (ChannelSftp) jschSession.openChannel("sftp");
         csftp.connect();
         String remoteFile = "/tmp/keyfile.pem";
         csftp.put(localFile, remoteFile);
+        // if selected, create and upload a credential file for Eon mode
+        if (params.containsKey("eonMode")) {
+            String create_db_eon = "sudo -u dbadmin /opt/vertica/bin/admintools -t create_db --skip-fs-checks -s "+allIp+" -d "+DBNAME+" -p "+DBPASS;
+            create_db = create_db_eon;
+            File tf = File.createTempFile("eonaws",".cnf");
+            BufferedWriter bw = new BufferedWriter(new FileWriter(tf));
+            bw.write("awsauth = "+awsAccessKeyID+":"+awsSecretAccessKey); bw.newLine();
+            bw.write("awsregion = "+awsRegion); bw.newLine();
+            bw.flush(); bw.close();
+            LOG.info("Uploading "+tf.getCanonicalPath());
+            csftp.put(tf.getCanonicalPath(), "/tmp/eonaws.conf");
+        }
         csftp.exit();
         // exec command(s)
-        String command = install_vertica;
-        Channel channel=jschSession.openChannel("exec");
-        ((ChannelExec)channel).setCommand(command);
-        channel.setInputStream(null);
-        ((ChannelExec)channel).setErrStream(System.err);
-        InputStream in=channel.getInputStream();
-        channel.connect();
-        byte[] tmp=new byte[1024];
-        while(true){
-            while(in.available()>0){
-                int i=in.read(tmp, 0, 1024);
-                if(i<0)break;
-                System.out.print(new String(tmp, 0, i));
+        List<String> commands = new ArrayList<String>();
+        commands.add(install_vertica);
+        commands.add(create_db);
+        commands.add("cat /tmp/eonaws.conf");
+        //String command = install_vertica;
+        for (String command : commands) {
+            LOG.info("SSH EXEC: "+command);
+            Channel channel=jschSession.openChannel("exec");
+            ((ChannelExec)channel).setCommand(command);
+            channel.setInputStream(null);
+            ((ChannelExec)channel).setErrStream(System.err);
+            InputStream in=channel.getInputStream();
+            channel.connect();
+            byte[] tmp=new byte[1024];
+            while(true){
+                while(in.available()>0){
+                    int i=in.read(tmp, 0, 1024);
+                    if(i<0)break;
+                    System.out.print(new String(tmp, 0, i));
+                }
+                if(channel.isClosed()){
+                    if(in.available()>0) continue;
+                    System.out.println("exit-status: "+channel.getExitStatus());
+                    break;
+                }
+                try{Thread.sleep(1000);}catch(Exception ee){}
             }
-            if(channel.isClosed()){
-                if(in.available()>0) continue;
-                System.out.println("exit-status: "+channel.getExitStatus());
-                break;
-            }
-            try{Thread.sleep(1000);}catch(Exception ee){}
+            channel.disconnect();
         }
-        channel.disconnect();
+        /*
         command = create_db;//"ls -ltr /tmp";
         channel=jschSession.openChannel("exec");
         ((ChannelExec)channel).setCommand(command);
@@ -215,12 +241,13 @@ public class AwsVerticaDemo {
             try{Thread.sleep(1000);}catch(Exception ee){}
         }
         channel.disconnect();
+        */
         jschSession.disconnect();
         // test Vertica
         AwsVerticaService avs = new AwsVerticaService();
         Properties vp = new Properties();
-        vp.setProperty("DBPASS","X");
-        vp.setProperty("DBNAME","X");
+        vp.setProperty("DBPASS",DBPASS);
+        vp.setProperty("DBNAME",DBNAME);
         vp.setProperty("node",publicIp);
         LOG.info(avs.checkState(vp));
     }
