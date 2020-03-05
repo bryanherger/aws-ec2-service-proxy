@@ -1,7 +1,11 @@
 // Based on http://jcgonzalez.com/java-simple-proxy-socket-server-examples
 
-package com.vertica.aws;
+package com.vertica.example;
 
+import com.vertica.aws.AwsCloudProvider;
+import com.vertica.aws.AwsUtil;
+import com.vertica.aws.Util;
+import com.vertica.aws.VerticaUtil;
 import org.apache.log4j.LogManager;
 import org.apache.log4j.Logger;
 
@@ -9,6 +13,7 @@ import java.io.*;
 import java.net.Socket;
 import java.util.Collections;
 import java.util.List;
+import java.util.Properties;
 
 /**
  * Handles a socket connection to the proxy server from the client and uses 2
@@ -21,8 +26,20 @@ public class ThreadProxy extends Thread {
     final static Logger LOG = LogManager.getLogger(ThreadProxy.class);
 
     private Socket sClient;
+    private String myThreadName;
     private String SERVER_URL;
     private int SERVER_PORT;
+    // use this constructor if not sure instances are running
+    ThreadProxy(Socket sClient, String ServerUrl, int ServerPort, AwsCloudProvider acp, Properties awsParams) {
+        LOG.info("Verifying infrasructure");
+        acp.startInstances(awsParams);
+        LOG.info("Constructing ProxyThread");
+        this.SERVER_URL = ServerUrl;
+        this.SERVER_PORT = ServerPort;
+        this.sClient = sClient;
+        this.start();
+    }
+    // otherwise, use this constructor, which will probably start faster
     ThreadProxy(Socket sClient, String ServerUrl, int ServerPort) {
         LOG.info("Constructing ProxyThread");
         this.SERVER_URL = ServerUrl;
@@ -34,32 +51,15 @@ public class ThreadProxy extends Thread {
     public void run() {
         try {
             LOG.info("Started ProxyThread");
-            setName("ProxyThread-"+System.currentTimeMillis());
+            myThreadName = "ProxyThread-"+System.currentTimeMillis();
+            setName(myThreadName);
             final byte[] request = new byte[1024];
             byte[] reply = new byte[4096];
             final InputStream inFromClient = sClient.getInputStream();
             final OutputStream outToClient = sClient.getOutputStream();
             Socket client = null, server = null;
-            String instanceId = SERVER_URL;
-            List<String> instanceIds = Collections.singletonList(instanceId);
             // connects a socket to the server
             try {
-                System.out.println("Checking whether to wake server");
-                List<String> sts = AwsUtil.getInstanceState(instanceIds);
-                if (sts.get(0).contains("stop")) {
-                    AwsUtil.testStartInstances();
-                }
-                SERVER_URL = AwsUtil.getInstancePublicDns(instanceIds);
-                int count = 15;
-                while (VerticaUtil.checkIfAlive(SERVER_URL) == false) {
-                    count--;
-                    if (count <= 0) { throw new IOException("Vertica is not available!"); }
-                    try {
-                        sleep(5000);
-                    } catch (Exception e) {
-
-                    }
-                }
                 System.out.println("Cluster DNS = "+ SERVER_URL);
                 server = new Socket(SERVER_URL, SERVER_PORT);
             } catch (IOException e) {
@@ -68,7 +68,7 @@ public class ThreadProxy extends Thread {
                 out.flush();
                 throw new RuntimeException(e);
             }
-            // a new thread to manage streams from server to client (DOWNLOAD)
+            // a new thread to manage streams from client to server (UPLOAD)
             final InputStream inFromServer = server.getInputStream();
             final OutputStream outToServer = server.getOutputStream();
             // a new thread for uploading to the server
@@ -98,7 +98,6 @@ public class ThreadProxy extends Thread {
                 while ((bytes_read = inFromServer.read(reply)) != -1) {
                     outToClient.write(reply, 0, bytes_read);
                     outToClient.flush();
-                    //TODO CREATE YOUR LOGIC HERE
                 }
             } catch (IOException e) {
                 e.printStackTrace();
@@ -117,15 +116,8 @@ public class ThreadProxy extends Thread {
         } catch (IOException e) {
             e.printStackTrace();
         }
-        LOG.info("Finished ProxyThread");
+        LOG.info("Finished "+myThreadName);
         Util.threadDump(); Util.td();
-        // the scheduler handles this now
-        /*if (Util.lastProxyThread()) {
-            LOG.info("Last ProxyThread, stopping instance");
-            VerticaUtil.checkIfActive(SERVER_URL);
-            String instanceId = "i-0496825e4f6bfcfb4";
-            Main.testHibernateInstance(instanceId);
-        }*/
-        LOG.info("Exiting ProxyThread");
+        LOG.info("Exiting "+myThreadName);
     }
 }

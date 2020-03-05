@@ -1,12 +1,17 @@
-package com.vertica.aws;
+package com.vertica.example;
 
+import com.vertica.aws.AwsCloudProvider;
+import com.vertica.aws.AwsUtil;
+import com.vertica.aws.Util;
 import org.apache.log4j.LogManager;
 import org.apache.log4j.Logger;
 import org.quartz.Job;
+import org.quartz.JobDataMap;
 import org.quartz.JobExecutionContext;
 import org.quartz.JobExecutionException;
 
 import java.util.Date;
+import java.util.Properties;
 
 public class MonitorJob implements Job {
     final static Logger LOG = LogManager.getLogger(MonitorJob.class);
@@ -24,7 +29,10 @@ public class MonitorJob implements Job {
             idleCount++;
             if (idleCount > 2) {
                 LOG.info("All ProxyThread stopped for three checks, stopping instance");
-                AwsUtil.testHibernateInstances();
+                JobDataMap jdm = context.getMergedJobDataMap();
+                AwsCloudProvider acp = new AwsCloudProvider();
+                acp.init((Properties) jdm.get("params"));
+                acp.stopInstances((Properties) jdm.get("params"));
                 idleCount = 0;
                 latch = false;
             }
