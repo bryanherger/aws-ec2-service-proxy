@@ -10,10 +10,7 @@ import org.quartz.*;
 import org.quartz.impl.StdSchedulerFactory;
 import software.amazon.awssdk.utils.StringUtils;
 
-import java.io.BufferedWriter;
-import java.io.File;
-import java.io.FileWriter;
-import java.io.InputStream;
+import java.io.*;
 import java.net.ServerSocket;
 import java.util.ArrayList;
 import java.util.List;
@@ -42,11 +39,21 @@ public class AwsVerticaDemo {
         rootLogger.addAppender(new ConsoleAppender(layout));
 
         // run test(s)
-        LOG.info("AwsVerticaDemo");
+        LOG.info("AwsVerticaDemo: args "+args.length);
         Properties params = new Properties();
+        // set defaults
         params.setProperty("awsAccessKeyID", awsAccessKeyID);
         params.setProperty("awsSecretAccessKey", awsSecretAccessKey);
         params.setProperty("awsRegion", awsRegion);
+        params.setProperty("VERTICA_PEM_KEYFILE", VERTICA_PEM_KEYFILE);
+        params.setProperty("DBNAME", DBNAME);
+        params.setProperty("DBPORT", DBPORT);
+        params.setProperty("DBPASS", DBPASS);
+        params.setProperty("DBUSER", DBUSER);
+        // load config file if specified and override
+        if (args.length > 0) {
+            params.load(new FileReader(args[0]));
+        }
         // demo spot requests: create then destroy
         AwsSpotInstanceManager asim = new AwsSpotInstanceManager();
         asim.submitSpotRequest(params);
@@ -66,12 +73,19 @@ public class AwsVerticaDemo {
         LOG.info("Using public IP (last node): "+publicIp);
         try {
             params.setProperty("eonMode","true");
-            verticaOnSpot(params, publicIp, String.join(",", ips));
+            params.setProperty("node", publicIp);
+            verticaOnSpot(params, String.join(",", ips));
         } catch (Exception e) {
             LOG.error(e.getMessage(), e);
         }
-        asim.terminateSpotInstances(params);
+        // let the scheduler kill the instances
+        //asim.terminateSpotInstances(params);
+        scheduleInit(params);
+        try { Thread.sleep(10000000L); } catch (Exception e) { }
         System.exit(0);
+    }
+
+    public static void proxyDemo(Properties params) throws Exception {
         AwsCloudProvider acp = new AwsCloudProvider();
         acp.init(params);
         params.setProperty("instanceTag","Service=VHibernateDemo");
@@ -127,7 +141,7 @@ public class AwsVerticaDemo {
             //Trigger trigger = newTrigger().withIdentity("trigger1", "group1").startAt(runTime).build();
             Trigger trigger = newTrigger()
                     .withIdentity("trigger1", "group1")
-                    .withSchedule(cronSchedule("0 0/2 * * * ?"))
+                    .withSchedule(cronSchedule("0 0/3 * * * ?"))
                     .build();
             // Tell quartz to schedule the job using our trigger
             sched.scheduleJob(job, trigger);
@@ -140,35 +154,21 @@ public class AwsVerticaDemo {
         }
     }
 
-    public static int countProxyThreads() {
-        ThreadGroup currentGroup = Thread.currentThread().getThreadGroup();
-        int noThreads = currentGroup.activeCount();
-        Thread[] lstThreads = new Thread[noThreads];
-        currentGroup.enumerate(lstThreads);
-        int count = 0;
-        for (int i = 0; i < noThreads; i++) {
-            System.out.println("Thread No:" + i + " = " + lstThreads[i].getName());
-            if (lstThreads[i].getName().contains("ProxyThread-")) {
-                System.out.println("*** proxy thread");
-                count++;
-            }
-        }
-        return count;
-    }
-
-    public static void verticaOnSpot(Properties params, String publicIp, String allIp) throws Exception {
+    public static void verticaOnSpot(Properties params, String allIp) throws Exception {
+        LOG.info("params:");
+        params.list(System.out);
         String install_vertica = "sudo /opt/vertica/sbin/install_vertica -i /tmp/keyfile.pem --debug --license CE --accept-eula --hosts "+allIp+" --dba-user-password-disabled --failure-threshold NONE --no-system-configuration";
-        String create_db = "sudo -u dbadmin /opt/vertica/bin/admintools -t create_db --skip-fs-checks -s "+allIp+" -d "+DBNAME+" -p "+DBPASS;
+        String create_db = "sudo -u dbadmin /opt/vertica/bin/admintools -t create_db --skip-fs-checks -s "+allIp+" -d "+params.getProperty("DBNAME")+" -p "+params.getProperty("DBPASS");
         // for Eon mode, we also need to upload a credential file
-        LOG.info("Will use node "+publicIp+" to install Vertica on "+allIp);
+        LOG.info("Will use node "+params.getProperty("node")+" to install Vertica on "+allIp);
         JSch jsch = new JSch();
-        Session jschSession = jsch.getSession(DBUSER, publicIp);
+        Session jschSession = jsch.getSession(params.getProperty("DBUSER"), params.getProperty("node"));
         java.util.Properties config = new java.util.Properties();
         // ignore host key since it changes for each new AWS instance
         config.put("StrictHostKeyChecking", "no");
         jschSession.setConfig(config);
         // set key file
-        String localFile = VERTICA_PEM_KEYFILE;
+        String localFile = params.getProperty("VERTICA_PEM_KEYFILE");
         jsch.addIdentity(localFile);
         jschSession.connect();
         ChannelSftp csftp = (ChannelSftp) jschSession.openChannel("sftp");
@@ -177,12 +177,12 @@ public class AwsVerticaDemo {
         csftp.put(localFile, remoteFile);
         // if selected, create and upload a credential file for Eon mode
         if (params.containsKey("eonMode")) {
-            String create_db_eon = "sudo -u dbadmin /opt/vertica/bin/admintools -t create_db --skip-fs-checks -s "+allIp+" -d "+DBNAME+" -p "+DBPASS;
+            String create_db_eon = "sudo -u dbadmin /opt/vertica/bin/admintools -t create_db --skip-fs-checks -s "+allIp+" -d "+params.getProperty("DBNAME")+" -p "+params.getProperty("DBPASS");
             create_db = create_db_eon;
             File tf = File.createTempFile("eonaws",".cnf");
             BufferedWriter bw = new BufferedWriter(new FileWriter(tf));
-            bw.write("awsauth = "+awsAccessKeyID+":"+awsSecretAccessKey); bw.newLine();
-            bw.write("awsregion = "+awsRegion); bw.newLine();
+            bw.write("awsauth = "+params.getProperty("awsAccessKeyID")+":"+params.getProperty("awsSecretAccessKey")); bw.newLine();
+            bw.write("awsregion = "+params.getProperty("awsRegion")); bw.newLine();
             bw.flush(); bw.close();
             LOG.info("Uploading "+tf.getCanonicalPath());
             csftp.put(tf.getCanonicalPath(), "/tmp/eonaws.conf");
@@ -245,10 +245,6 @@ public class AwsVerticaDemo {
         jschSession.disconnect();
         // test Vertica
         AwsVerticaService avs = new AwsVerticaService();
-        Properties vp = new Properties();
-        vp.setProperty("DBPASS",DBPASS);
-        vp.setProperty("DBNAME",DBNAME);
-        vp.setProperty("node",publicIp);
-        LOG.info(avs.checkState(vp));
+        LOG.info(avs.checkState(params));
     }
 }
