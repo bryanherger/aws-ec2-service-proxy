@@ -33,10 +33,10 @@ public class AwsVerticaDemo {
     public static void main(String[] argv) throws Exception {
         // parse command line args
         Args args = new Args();
-        JCommander.newBuilder()
+        JCommander jc = JCommander.newBuilder()
                 .addObject(args)
-                .build()
-                .parse(argv);
+                .build();
+        jc.parse(argv);
         //This is the root logger provided by log4j
         Logger rootLogger = Logger.getRootLogger();
         rootLogger.setLevel(Level.INFO);
@@ -48,8 +48,26 @@ public class AwsVerticaDemo {
         rootLogger.addAppender(new ConsoleAppender(layout));
 
         // run test(s)
-        LOG.info("AwsVerticaDemo: args " + argv.length);
         Properties params = new Properties();
+        LOG.info("AwsVerticaDemo: args " + argv.length);
+        if (args.help) {
+            LOG.error("(help option?)");
+            jc.usage();
+            System.exit(0);
+        }
+        if (args.spot) {
+            LOG.error("!$ using spot instances");
+            params.setProperty("spotInstances","true");
+        } else {
+            LOG.error("!$ using on-demand instances");
+        }
+        // Eon mode for spot currently assumes we are reviving an existing database
+        if (args.eonMode) {
+            LOG.error("!V using Eon mode DB");
+            params.setProperty("eonMode","true");
+        } else {
+            LOG.error("!V using EE ode DB");
+        }
         // set defaults
         params.setProperty("awsAccessKeyID", awsAccessKeyID);
         params.setProperty("awsSecretAccessKey", awsSecretAccessKey);
@@ -59,8 +77,6 @@ public class AwsVerticaDemo {
         params.setProperty("DBPORT", DBPORT);
         params.setProperty("DBPASS", DBPASS);
         params.setProperty("DBUSER", DBUSER);
-        // Eon mode for spot currently assumes we are reviving an existing database
-        params.setProperty("eonMode","true");
         params.setProperty("DBS3BUCKET",DBS3BUCKET);
         params.setProperty("DBDATADIR",DBDATADIR);
         // load config file if specified and override
@@ -213,8 +229,13 @@ public class AwsVerticaDemo {
 
 class Args {
     // command line parsing: see http://jcommander.org/#_overview
-    @Parameter(names = {"-p","--properties"}, description = "Properties file (java.util.Properties format")
+    // in the help output from usage(), it looks like options are printed in order of long option name, regardless of order here
+    @Parameter(names = {"-p","--properties"}, description = "Properties file (java.util.Properties format) (if omitted, use defaults for all settings not listed here)")
     public String propertiesFile = null;
-    @Parameter(names = "--help", help = true)
+    @Parameter(names = {"-s","--spot"}, description = "Create spot instances (default: on-demand)")
+    public boolean spot = false;
+    @Parameter(names = {"-e","--eonmode"}, description = "Create Eon mode DB (default: EE)")
+    public boolean eonMode = false;
+    @Parameter(names = {"-?","--help"}, help = true, description = "Print this message")
     public boolean help;
 }

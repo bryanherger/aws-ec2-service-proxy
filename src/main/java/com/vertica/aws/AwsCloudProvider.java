@@ -28,6 +28,18 @@ public class AwsCloudProvider implements CloudProviderInterface {
 
     @Override
     public boolean createInstances(Properties targets) {
+        if (targets.containsKey("spotInstances")) {
+            return createSpotInstances(targets);
+        } else {
+            return createOnDemandInstances(targets);
+        }
+    }
+
+    public boolean createSpotInstances(Properties params) {
+        return false;
+    }
+
+    public boolean createOnDemandInstances(Properties params) {
         return false;
     }
 

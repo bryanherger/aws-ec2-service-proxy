@@ -26,7 +26,18 @@ public class AwsVerticaService implements CloudServiceInterface {
     @Override
     public boolean createServices(Properties targets) {
         // create or revive (from hibernate) EE, or create or revive (from S3) Eon mode
+        if (targets.containsKey("eonMode")) {
+            return createEonServices(targets);
+        } else {
+            return createEEServices(targets);
+        }
+    }
 
+    private boolean createEEServices(Properties targets) {
+        return false;
+    }
+
+    private boolean createEonServices(Properties targets) {
         return false;
     }
 
