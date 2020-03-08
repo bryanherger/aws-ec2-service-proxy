@@ -1,8 +1,6 @@
 package com.vertica.example;
 
-import com.vertica.aws.AwsCloudProvider;
-import com.vertica.aws.AwsUtil;
-import com.vertica.aws.Util;
+import com.vertica.aws.*;
 import org.apache.log4j.LogManager;
 import org.apache.log4j.Logger;
 import org.quartz.Job;
@@ -24,17 +22,23 @@ public class MonitorJob implements Job {
         int c = Util.countProxyThreads();
         LOG.info("Quartz cron job! "+c+" running proxy threads - " + new Date());
         if (c > 0) { latch =  true; idleCount = 0; }
-        if (c == 0 && latch) {
+        if (c == 0 /*&& latch*/) {
             LOG.info("All proxy threads stopped!");
             idleCount++;
-            if (idleCount > 2) {
+            if (idleCount > 0) {
                 LOG.info("All ProxyThread stopped for three checks, stopping instance");
                 JobDataMap jdm = context.getMergedJobDataMap();
-                AwsCloudProvider acp = new AwsCloudProvider();
+                /*AwsCloudProvider acp = new AwsCloudProvider();
                 acp.init((Properties) jdm.get("params"));
                 acp.stopInstances((Properties) jdm.get("params"));
                 idleCount = 0;
-                latch = false;
+                latch = false;*/
+                Properties p = (Properties) jdm.get("params");
+                AwsVerticaService avs = new AwsVerticaService();
+                avs.destroyServices(p);
+                AwsSpotInstanceManager asim = new AwsSpotInstanceManager();
+                asim.terminateSpotInstances(p);
+                System.exit(0);
             }
         }
     }

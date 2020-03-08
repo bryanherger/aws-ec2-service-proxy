@@ -1,8 +1,14 @@
 package com.vertica.aws;
 
+import com.vertica.example.ThreadProxy;
+import org.apache.log4j.LogManager;
+import org.apache.log4j.Logger;
+
 import java.util.Set;
 
 public class Util {
+    final static Logger LOG = LogManager.getLogger(Util.class);
+
     public static void threadDump() {
         Set<Thread> threadSet = Thread.getAllStackTraces().keySet();
         int count = 0;
@@ -22,24 +28,12 @@ public class Util {
         currentGroup.enumerate(lstThreads);
 
         for (int i = 0; i < noThreads; i++) {
-            System.out.println("Thread No:" + i + " = " + lstThreads[i].getName());
+            LOG.info("Thread No:" + i + " = " + lstThreads[i].getName());
         }
     }
 
     public static boolean lastProxyThread() {
-        ThreadGroup currentGroup = Thread.currentThread().getThreadGroup();
-        int noThreads = currentGroup.activeCount();
-        Thread[] lstThreads = new Thread[noThreads];
-        currentGroup.enumerate(lstThreads);
-        int count = 0;
-        for (int i = 0; i < noThreads; i++) {
-            System.out.println("Thread No:" + i + " = " + lstThreads[i].getName());
-            if (lstThreads[i].getName().contains("ProxyThread-")) {
-                System.out.println("*** proxy thread");
-                count++;
-            }
-        }
-        return (count > 1 ? false : true);
+        return (countProxyThreads() > 1 ? false : true);
     }
 
     public static int countProxyThreads() {
@@ -49,9 +43,8 @@ public class Util {
         currentGroup.enumerate(lstThreads);
         int count = 0;
         for (int i = 0; i < noThreads; i++) {
-            System.out.println("Thread No:" + i + " = " + lstThreads[i].getName());
             if (lstThreads[i].getName().contains("ProxyThread-")) {
-                System.out.println("*** proxy thread");
+                LOG.info("*** proxy thread: Thread No:" + i + " = " + lstThreads[i].getName());
                 count++;
             }
         }

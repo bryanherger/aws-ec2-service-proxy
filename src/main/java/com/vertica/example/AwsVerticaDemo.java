@@ -1,9 +1,12 @@
 package com.vertica.example;
 
+import com.beust.jcommander.JCommander;
+import com.beust.jcommander.Parameter;
 import com.jcraft.jsch.*;
 import com.vertica.aws.AwsCloudProvider;
 import com.vertica.aws.AwsSpotInstanceManager;
 import com.vertica.aws.AwsVerticaService;
+import com.vertica.devops.SshUtil;
 import org.apache.log4j.*;
 import org.apache.log4j.Logger;
 import org.quartz.*;
@@ -27,7 +30,13 @@ public class AwsVerticaDemo {
             , awsRegion = "0";
     private static String DBUSER = "X", DBPASS = "X", DBNAME = "X", DBPORT = "0";
 
-    public static void main(String[] args) throws Exception {
+    public static void main(String[] argv) throws Exception {
+        // parse command line args
+        Args args = new Args();
+        JCommander.newBuilder()
+                .addObject(args)
+                .build()
+                .parse(argv);
         //This is the root logger provided by log4j
         Logger rootLogger = Logger.getRootLogger();
         rootLogger.setLevel(Level.INFO);
@@ -39,7 +48,7 @@ public class AwsVerticaDemo {
         rootLogger.addAppender(new ConsoleAppender(layout));
 
         // run test(s)
-        LOG.info("AwsVerticaDemo: args "+args.length);
+        LOG.info("AwsVerticaDemo: args " + argv.length);
         Properties params = new Properties();
         // set defaults
         params.setProperty("awsAccessKeyID", awsAccessKeyID);
@@ -50,10 +59,19 @@ public class AwsVerticaDemo {
         params.setProperty("DBPORT", DBPORT);
         params.setProperty("DBPASS", DBPASS);
         params.setProperty("DBUSER", DBUSER);
+        // Eon mode for spot currently assumes we are reviving an existing database
+        params.setProperty("eonMode","true");
+        params.setProperty("DBS3BUCKET",DBS3BUCKET);
+        params.setProperty("DBDATADIR",DBDATADIR);
         // load config file if specified and override
-        if (args.length > 0) {
-            params.load(new FileReader(args[0]));
+        if (args.propertiesFile != null) {
+            LOG.info("Reading properties from "+args.propertiesFile);
+            params.load(new FileReader(args.propertiesFile));
         }
+        spotInstanceDemo(params);
+    }
+
+    public static void spotInstanceDemo(Properties params) {
         // demo spot requests: create then destroy
         AwsSpotInstanceManager asim = new AwsSpotInstanceManager();
         asim.submitSpotRequest(params);
@@ -72,16 +90,16 @@ public class AwsVerticaDemo {
         try { Thread.sleep(10000L); } catch (Exception e) { }
         LOG.info("Using public IP (last node): "+publicIp);
         try {
-            params.setProperty("eonMode","true");
             params.setProperty("node", publicIp);
-            verticaOnSpot(params, String.join(",", ips));
+            params.setProperty("allNodes", String.join(",", ips));
+            verticaOnSpot(params);
         } catch (Exception e) {
             LOG.error(e.getMessage(), e);
         }
         // let the scheduler kill the instances
         //asim.terminateSpotInstances(params);
         scheduleInit(params);
-        try { Thread.sleep(10000000L); } catch (Exception e) { }
+        try { Thread.sleep(60L*1000L); } catch (Exception e) { }
         System.exit(0);
     }
 
@@ -154,97 +172,49 @@ public class AwsVerticaDemo {
         }
     }
 
-    public static void verticaOnSpot(Properties params, String allIp) throws Exception {
+    public static void verticaOnSpot(Properties params) throws Exception {
         LOG.info("params:");
         params.list(System.out);
-        String install_vertica = "sudo /opt/vertica/sbin/install_vertica -i /tmp/keyfile.pem --debug --license CE --accept-eula --hosts "+allIp+" --dba-user-password-disabled --failure-threshold NONE --no-system-configuration";
-        String create_db = "sudo -u dbadmin /opt/vertica/bin/admintools -t create_db --skip-fs-checks -s "+allIp+" -d "+params.getProperty("DBNAME")+" -p "+params.getProperty("DBPASS");
+        String allIp = params.getProperty("allNodes");
         // for Eon mode, we also need to upload a credential file
         LOG.info("Will use node "+params.getProperty("node")+" to install Vertica on "+allIp);
-        JSch jsch = new JSch();
-        Session jschSession = jsch.getSession(params.getProperty("DBUSER"), params.getProperty("node"));
-        java.util.Properties config = new java.util.Properties();
-        // ignore host key since it changes for each new AWS instance
-        config.put("StrictHostKeyChecking", "no");
-        jschSession.setConfig(config);
-        // set key file
-        String localFile = params.getProperty("VERTICA_PEM_KEYFILE");
-        jsch.addIdentity(localFile);
-        jschSession.connect();
-        ChannelSftp csftp = (ChannelSftp) jschSession.openChannel("sftp");
-        csftp.connect();
-        String remoteFile = "/tmp/keyfile.pem";
-        csftp.put(localFile, remoteFile);
-        // if selected, create and upload a credential file for Eon mode
+        SshUtil ssh = new SshUtil();
+        ssh.sftp(params, params.getProperty("VERTICA_PEM_KEYFILE"), "/tmp/keyfile.pem");
+        // exec command(s)
+        List<String> commands = new ArrayList<String>();
         if (params.containsKey("eonMode")) {
-            String create_db_eon = "sudo -u dbadmin /opt/vertica/bin/admintools -t create_db --skip-fs-checks -s "+allIp+" -d "+params.getProperty("DBNAME")+" -p "+params.getProperty("DBPASS");
-            create_db = create_db_eon;
+            // Eon mode
+            commands.add("sudo /opt/vertica/sbin/install_vertica -i /tmp/keyfile.pem --debug --license CE --accept-eula --hosts "+allIp+" --dba-user-password-disabled --failure-threshold NONE -d "+params.getProperty("DBDATADIR"));
+            commands.add("sudo -u dbadmin /opt/vertica/bin/admintools -t revive_db --force -s "+allIp+" -d "+params.getProperty("DBNAME")+" -x /tmp/eonaws.conf --communal-storage-location="+params.getProperty("DBS3BUCKET"));
+            commands.add("sudo -u dbadmin /opt/vertica/bin/admintools -t start_db -i -d "+params.getProperty("DBNAME")+" -p "+params.getProperty("DBPASS"));
+            // if selected, create and upload a credential file for Eon mode
             File tf = File.createTempFile("eonaws",".cnf");
             BufferedWriter bw = new BufferedWriter(new FileWriter(tf));
             bw.write("awsauth = "+params.getProperty("awsAccessKeyID")+":"+params.getProperty("awsSecretAccessKey")); bw.newLine();
             bw.write("awsregion = "+params.getProperty("awsRegion")); bw.newLine();
             bw.flush(); bw.close();
             LOG.info("Uploading "+tf.getCanonicalPath());
-            csftp.put(tf.getCanonicalPath(), "/tmp/eonaws.conf");
+            ssh.sftp(params, tf.getCanonicalPath(), "/tmp/eonaws.conf");
+        } else {
+            // EE mode
+            commands.add("sudo /opt/vertica/sbin/install_vertica -i /tmp/keyfile.pem --debug --license CE --accept-eula --hosts "+allIp+" --dba-user-password-disabled --failure-threshold NONE --no-system-configuration");
+            commands.add("sudo -u dbadmin /opt/vertica/bin/admintools -t create_db --skip-fs-checks -s "+allIp+" -d "+params.getProperty("DBNAME")+" -p "+params.getProperty("DBPASS"));
         }
-        csftp.exit();
-        // exec command(s)
-        List<String> commands = new ArrayList<String>();
-        commands.add(install_vertica);
-        commands.add(create_db);
-        commands.add("cat /tmp/eonaws.conf");
+        //commands.add("cat /opt/vertica/log/adminTools.log");
         //String command = install_vertica;
         for (String command : commands) {
-            LOG.info("SSH EXEC: "+command);
-            Channel channel=jschSession.openChannel("exec");
-            ((ChannelExec)channel).setCommand(command);
-            channel.setInputStream(null);
-            ((ChannelExec)channel).setErrStream(System.err);
-            InputStream in=channel.getInputStream();
-            channel.connect();
-            byte[] tmp=new byte[1024];
-            while(true){
-                while(in.available()>0){
-                    int i=in.read(tmp, 0, 1024);
-                    if(i<0)break;
-                    System.out.print(new String(tmp, 0, i));
-                }
-                if(channel.isClosed()){
-                    if(in.available()>0) continue;
-                    System.out.println("exit-status: "+channel.getExitStatus());
-                    break;
-                }
-                try{Thread.sleep(1000);}catch(Exception ee){}
-            }
-            channel.disconnect();
+            ssh.ssh(params, command);
         }
-        /*
-        command = create_db;//"ls -ltr /tmp";
-        channel=jschSession.openChannel("exec");
-        ((ChannelExec)channel).setCommand(command);
-        channel.setInputStream(null);
-        ((ChannelExec)channel).setErrStream(System.err);
-        in=channel.getInputStream();
-        channel.connect();
-        tmp=new byte[1024];
-        while(true){
-            while(in.available()>0){
-                int i=in.read(tmp, 0, 1024);
-                if(i<0)break;
-                System.out.print(new String(tmp, 0, i));
-            }
-            if(channel.isClosed()){
-                if(in.available()>0) continue;
-                System.out.println("exit-status: "+channel.getExitStatus());
-                break;
-            }
-            try{Thread.sleep(1000);}catch(Exception ee){}
-        }
-        channel.disconnect();
-        */
-        jschSession.disconnect();
         // test Vertica
         AwsVerticaService avs = new AwsVerticaService();
         LOG.info(avs.checkState(params));
     }
+}
+
+class Args {
+    // command line parsing: see http://jcommander.org/#_overview
+    @Parameter(names = {"-p","--properties"}, description = "Properties file (java.util.Properties format")
+    public String propertiesFile = null;
+    @Parameter(names = "--help", help = true)
+    public boolean help;
 }
