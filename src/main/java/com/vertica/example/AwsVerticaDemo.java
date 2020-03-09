@@ -72,6 +72,7 @@ public class AwsVerticaDemo {
         params.setProperty("awsAccessKeyID", awsAccessKeyID);
         params.setProperty("awsSecretAccessKey", awsSecretAccessKey);
         params.setProperty("awsRegion", awsRegion);
+        params.setProperty("awsKeyPairName", awsKeyPairName);
         params.setProperty("VERTICA_PEM_KEYFILE", VERTICA_PEM_KEYFILE);
         params.setProperty("DBNAME", DBNAME);
         params.setProperty("DBPORT", DBPORT);
@@ -89,18 +90,21 @@ public class AwsVerticaDemo {
 
     public static void spotInstanceDemo(Properties params) {
         // demo spot requests: create then destroy
-        AwsSpotInstanceManager asim = new AwsSpotInstanceManager();
-        asim.submitSpotRequest(params);
-        String asimss = asim.checkSpotState(params);
-        LOG.info("spot state: "+asim.checkSpotState(params));
+        AwsCloudProvider acp = new AwsCloudProvider();
+        acp.init(params);
+        //AwsSpotInstanceManager asim = new AwsSpotInstanceManager();
+        params.setProperty("serviceTag","VerticaSpotDemo");
+        acp.createInstances(params);
+        String asimss = acp.checkState(params);
+        LOG.info("spot state: "+asimss);
         String publicIp = null;
         List<String> ips = new ArrayList<>();
         for (String ip : asimss.split(";;")) {
             String findDns[] = ip.split("\\|");
-            if (findDns.length == 3 && !StringUtils.isEmpty(findDns[1])) {
-                LOG.info("private IP: "+findDns[1]);
-                ips.add(findDns[1]);
-                publicIp = findDns[2];
+            if (findDns.length == 5 && !StringUtils.isEmpty(findDns[4])) {
+                LOG.info("private IP: "+findDns[4]);
+                ips.add(findDns[4]);
+                publicIp = findDns[3];
             }
         }
         try { Thread.sleep(10000L); } catch (Exception e) { }
@@ -115,7 +119,7 @@ public class AwsVerticaDemo {
         // let the scheduler kill the instances
         //asim.terminateSpotInstances(params);
         scheduleInit(params);
-        try { Thread.sleep(60L*1000L); } catch (Exception e) { }
+        try { LOG.error("Waiting 600 seconds before exiting!"); Thread.sleep(600L*1000L); } catch (Exception e) { }
         System.exit(0);
     }
 
@@ -137,7 +141,7 @@ public class AwsVerticaDemo {
         String[] findDns = cs.split(";;");
         for (String findDns1 : findDns) {
             String findDns1a[] = findDns1.split("\\|");
-            if (findDns1a.length == 4 && !StringUtils.isEmpty(findDns1a[3])) {
+            if (findDns1a.length == 5 && !StringUtils.isEmpty(findDns1a[3])) {
                 LOG.info("using node "+findDns1a[3]);
                 params.setProperty("node", findDns1a[3]);
                 break;
@@ -146,6 +150,7 @@ public class AwsVerticaDemo {
         if (!StringUtils.isEmpty(params.getProperty("node"))) {
             avs.checkState(params);
             scheduleInit(params);
+            // TODO: convert to parameters
             int remoteport = 5433;
             int localport = 35433;
             // Print a start-up message

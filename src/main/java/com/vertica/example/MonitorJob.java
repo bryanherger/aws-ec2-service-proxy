@@ -36,8 +36,11 @@ public class MonitorJob implements Job {
                 Properties p = (Properties) jdm.get("params");
                 AwsVerticaService avs = new AwsVerticaService();
                 avs.destroyServices(p);
-                AwsSpotInstanceManager asim = new AwsSpotInstanceManager();
-                asim.terminateSpotInstances(p);
+                //AwsSpotInstanceManager asim = new AwsSpotInstanceManager();
+                //asim.terminateSpotInstances(p);
+                AwsCloudProvider acp = new AwsCloudProvider();
+                acp.init(p);
+                acp.destroyInstances(p);
                 System.exit(0);
             }
         }

@@ -6,12 +6,15 @@ import org.apache.log4j.LogManager;
 import org.apache.log4j.Logger;
 import software.amazon.awssdk.services.ec2.Ec2Client;
 import software.amazon.awssdk.services.ec2.model.*;
+import software.amazon.awssdk.utils.StringUtils;
 
 import java.util.*;
 
+// TODO: fold back into AwsCloudProvider class
 public class AwsSpotInstanceManager {
     final static Logger LOG = LogManager.getLogger(AwsSpotInstanceManager.class);
 
+    @Deprecated
     public boolean submitSpotRequest(Properties params) {
         String tagName = "AwsVerticaDemo-" + System.currentTimeMillis();
         params.setProperty("spotTag", tagName);
@@ -52,7 +55,7 @@ public class AwsSpotInstanceManager {
 
         // Open up port 22 for TCP traffic to the associated IP
         // from above (e.g. ssh traffic).
-        ArrayList<IpPermission> ipPermissions = new ArrayList<IpPermission>();
+        ArrayList<IpPermission> ipPermissions = new ArrayList<>();
         /*IpPermission ipPermission = new IpPermission();
         ipPermission.setIpProtocol("tcp");
         ipPermission.setFromPort(new Integer(22));
@@ -86,11 +89,13 @@ public class AwsSpotInstanceManager {
         ArrayList<String> securityGroups = new ArrayList<>();
         securityGroups.add(tagName+"-SpotGroup");
         // Add the launch specifications to the request. Use Vertica AMI here...
+        String sit = params.getProperty("instanceType");
+        InstanceType spotInstanceType = StringUtils.isEmpty(sit)?InstanceType.C5_LARGE:InstanceType.fromValue(sit);
         RequestSpotLaunchSpecification launchSpecification = RequestSpotLaunchSpecification.builder()
                 .imageId(AwsVerticaService.getVerticaAmiId())
-                .instanceType(InstanceType.C5_LARGE)
+                .instanceType(spotInstanceType)
                 .securityGroups(securityGroups)
-                .keyName("VerticaToolbox").build();
+                .keyName(params.getProperty("awsKeyPairName")).build();
         // Request instance with a bid price
         RequestSpotInstancesRequest requestRequest = RequestSpotInstancesRequest.builder()/*.spotPrice("0.05")*/.instanceCount(3).launchSpecification(launchSpecification).build();
         // Call the RequestSpotInstance API.
@@ -165,6 +170,7 @@ public class AwsSpotInstanceManager {
         return false;
     }
 
+    @Deprecated
     public String checkSpotState(Properties params) {
         LOG.info("Spot instance request Id's: "+params.getProperty("sirs"));
         LOG.info("Spot instance Id's: "+params.getProperty("spotIds"));
@@ -185,6 +191,7 @@ public class AwsSpotInstanceManager {
         return String.join(";;", fresponse);
     }
 
+    @Deprecated
     public String terminateSpotInstances(Properties params) {
         System.setProperty("aws.accessKeyId", params.getProperty("awsAccessKeyID"));
         System.setProperty("aws.secretAccessKey", params.getProperty("awsSecretAccessKey"));
