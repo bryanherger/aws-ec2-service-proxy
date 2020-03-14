@@ -73,6 +73,8 @@ public class AwsVerticaDemo {
         params.setProperty("awsSecretAccessKey", awsSecretAccessKey);
         params.setProperty("awsRegion", awsRegion);
         params.setProperty("awsKeyPairName", awsKeyPairName);
+        params.setProperty("awsS3Bucket", args.communalStorage);
+        params.setProperty("DBSECONDARY", args.secondarySubcluster);
         params.setProperty("VERTICA_PEM_KEYFILE", VERTICA_PEM_KEYFILE);
         params.setProperty("DBNAME", DBNAME);
         params.setProperty("DBPORT", DBPORT);
@@ -80,21 +82,36 @@ public class AwsVerticaDemo {
         params.setProperty("DBUSER", DBUSER);
         params.setProperty("DBS3BUCKET",DBS3BUCKET);
         params.setProperty("DBDATADIR",DBDATADIR);
+        if (args.tagBaseName != null) {
+            params.setProperty("tagBaseName",args.tagBaseName);
+        }
         // load config file if specified and override
         if (args.propertiesFile != null) {
             LOG.info("Reading properties from "+args.propertiesFile);
             params.load(new FileReader(args.propertiesFile));
         }
-        spotInstanceDemo(params);
+        if (args.proxyPorts != null && args.proxyPorts.contains(":")) {
+            params.setProperty("DBPROXY", args.proxyPorts);
+        } else {
+            params.setProperty("DBPROXY", DBPROXY);
+        }
+        if ("proxy".equalsIgnoreCase(args.demoMode)) {
+            proxyDemo(params);
+        } else if ("proxydemo".equalsIgnoreCase(args.demoMode)) {
+            proxyDemo(params);
+        } else {
+            spotInstanceDemo(params);
+        }
+        System.exit(0);
     }
 
     public static void spotInstanceDemo(Properties params) {
         // demo spot requests: create then destroy
         AwsCloudProvider acp = new AwsCloudProvider();
         acp.init(params);
-        //AwsSpotInstanceManager asim = new AwsSpotInstanceManager();
         params.setProperty("serviceTag","VerticaSpotDemo");
-        acp.createInstances(params);
+        //acp.createInstances(params);
+        acp.createVerticaNodes(params, "default", 6, "c5.large");
         String asimss = acp.checkState(params);
         LOG.info("spot state: "+asimss);
         String publicIp = null;
@@ -112,15 +129,15 @@ public class AwsVerticaDemo {
         try {
             params.setProperty("node", publicIp);
             params.setProperty("allNodes", String.join(",", ips));
-            verticaOnSpot(params);
+            AwsVerticaService avs = new AwsVerticaService();
+            avs.installVertica(params);
         } catch (Exception e) {
             LOG.error(e.getMessage(), e);
         }
         // let the scheduler kill the instances
-        //asim.terminateSpotInstances(params);
-        scheduleInit(params);
-        try { LOG.error("Waiting 600 seconds before exiting!"); Thread.sleep(600L*1000L); } catch (Exception e) { }
-        System.exit(0);
+        params.setProperty("stopBehavior","terminate");
+        //scheduleInit(params);
+        //try { LOG.error("Waiting 600 seconds before exiting!"); Thread.sleep(600L*1000L); } catch (Exception e) { }
     }
 
     public static void proxyDemo(Properties params) throws Exception {
@@ -151,11 +168,12 @@ public class AwsVerticaDemo {
             avs.checkState(params);
             scheduleInit(params);
             // TODO: convert to parameters
-            int remoteport = 5433;
-            int localport = 35433;
+            String[] proxyPorts = params.getProperty("DBPROXY").split(":");
+            int localport = Integer.parseInt(proxyPorts[0]);
+            int remoteport = Integer.parseInt(proxyPorts[1]);
             // Print a start-up message
             System.out.println("Starting proxy for " + params.getProperty("node") + ":" + remoteport
-                    + " on port " + localport);
+                    + " on local port " + localport);
             ServerSocket server = new ServerSocket(localport);
             while (true) {
                 new ThreadProxy(server.accept(), params.getProperty("node"), remoteport, acp, params);
@@ -169,30 +187,25 @@ public class AwsVerticaDemo {
 
     public static void scheduleInit(Properties params) {
         try {
-            // First we must get a reference to a scheduler
             SchedulerFactory sf = new StdSchedulerFactory();
             Scheduler sched = sf.getScheduler();
-            // define the job and tie it to our HelloJob class
             JobDataMap jdm = new JobDataMap();
             jdm.put("params", params);
             JobDetail job = newJob(MonitorJob.class).withIdentity("job1", "group1").usingJobData(jdm).build();
-            // Trigger the job to run on the next round minute
-            //Trigger trigger = newTrigger().withIdentity("trigger1", "group1").startAt(runTime).build();
+            // TODO: make the schedule configurable
             Trigger trigger = newTrigger()
                     .withIdentity("trigger1", "group1")
-                    .withSchedule(cronSchedule("0 0/3 * * * ?"))
+                    .withSchedule(cronSchedule("0 0/2 * * * ?"))
                     .build();
-            // Tell quartz to schedule the job using our trigger
             sched.scheduleJob(job, trigger);
-            // Start up the scheduler (nothing can actually run until the
-            // scheduler has been started)
             sched.start();
-            LOG.info("------- Started Scheduler -----------------");
+            LOG.info("--- Started Scheduler");
         } catch (Exception e) {
             e.printStackTrace();
         }
     }
 
+    @Deprecated
     public static void verticaOnSpot(Properties params) throws Exception {
         LOG.info("params:");
         params.list(System.out);
@@ -229,6 +242,12 @@ public class AwsVerticaDemo {
         // test Vertica
         AwsVerticaService avs = new AwsVerticaService();
         LOG.info(avs.checkState(params));
+        // populate node and subcluster list
+        avs.getClusterState(params);
+        // let's try adding a new secondary subcluster
+        avs.runQuery(params, "SELECT REBALANCE_SHARDS();");
+        // destroy all the things!
+
     }
 }
 
@@ -237,6 +256,16 @@ class Args {
     // in the help output from usage(), it looks like options are printed in order of long option name, regardless of order here
     @Parameter(names = {"-p","--properties"}, description = "Properties file (java.util.Properties format) (if omitted, use defaults for all settings not listed here)")
     public String propertiesFile = null;
+    @Parameter(names = {"-t","--tagname"}, description = "Tag name for resources (if omitted, use a string derived from current timestamp)")
+    public String tagBaseName = "AwsVerticaDemo-" + System.currentTimeMillis();
+    @Parameter(names = {"-d","--demomode"}, description = "Which demo mode to run (if omitted or invalid, demo spot instances and exit)")
+    public String demoMode = null;
+    @Parameter(names = {"-P","--ports"}, description = "For proxy service, <local port>:<remote port> (if omitted or invalid, 35433:5433, or forward local port 35433 to remote port 5433)")
+    public String proxyPorts = null;
+    @Parameter(names = {"-c","--communal-storage"}, description = "Communal storage location (S3 bucket) (if omitted or invalid, no default, error will occur with Eon mode. This setting is ignored for EE mode)")
+    public String communalStorage = "";
+    @Parameter(names = {"-S","--secondary-subcluster"}, description = "Create a secondary subcluster with name:nodeCount:instanceType (if omitted or invalid, no default, no secondary subcluster will be created. This setting is ignored for EE mode)")
+    public String secondarySubcluster = "";
     @Parameter(names = {"-s","--spot"}, description = "Create spot instances (default: on-demand)")
     public boolean spot = false;
     @Parameter(names = {"-e","--eonmode"}, description = "Create Eon mode DB (default: EE)")

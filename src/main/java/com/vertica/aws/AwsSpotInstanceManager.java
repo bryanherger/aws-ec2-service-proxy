@@ -15,7 +15,7 @@ public class AwsSpotInstanceManager {
     final static Logger LOG = LogManager.getLogger(AwsSpotInstanceManager.class);
 
     @Deprecated
-    public boolean submitSpotRequest(Properties params) {
+    private boolean submitSpotRequest(Properties params) {
         String tagName = "AwsVerticaDemo-" + System.currentTimeMillis();
         params.setProperty("spotTag", tagName);
         // Step 2: Setting Up a Security Group
@@ -171,7 +171,7 @@ public class AwsSpotInstanceManager {
     }
 
     @Deprecated
-    public String checkSpotState(Properties params) {
+    private String checkSpotState(Properties params) {
         LOG.info("Spot instance request Id's: "+params.getProperty("sirs"));
         LOG.info("Spot instance Id's: "+params.getProperty("spotIds"));
         List<String> instanceIds = Arrays.asList(params.getProperty("spotIds").split(";;"));
@@ -192,7 +192,7 @@ public class AwsSpotInstanceManager {
     }
 
     @Deprecated
-    public String terminateSpotInstances(Properties params) {
+    private String terminateSpotInstances(Properties params) {
         System.setProperty("aws.accessKeyId", params.getProperty("awsAccessKeyID"));
         System.setProperty("aws.secretAccessKey", params.getProperty("awsSecretAccessKey"));
         System.setProperty("aws.region", params.getProperty("awsRegion"));

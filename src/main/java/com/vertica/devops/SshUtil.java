@@ -11,17 +11,27 @@ public class SshUtil {
     final static Logger LOG = LogManager.getLogger(SshUtil.class);
 
     private Session getConnection(Properties params) throws Exception {
-        JSch jsch = new JSch();
-        Session jschSession = jsch.getSession(params.getProperty("DBUSER"), params.getProperty("node"));
-        java.util.Properties config = new java.util.Properties();
-        // ignore host key since it changes for each new cloud instance
-        config.put("StrictHostKeyChecking", "no");
-        jschSession.setConfig(config);
-        // set key file
-        String keyFile = params.getProperty("VERTICA_PEM_KEYFILE");
-        jsch.addIdentity(keyFile);
-        jschSession.connect();
-        return jschSession;
+        int count = 3;
+        while (count > 0) {
+            try {
+                JSch jsch = new JSch();
+                Session jschSession = jsch.getSession(params.getProperty("DBUSER"), params.getProperty("node"));
+                java.util.Properties config = new java.util.Properties();
+                // ignore host key since it changes for each new cloud instance
+                config.put("StrictHostKeyChecking", "no");
+                jschSession.setConfig(config);
+                // set key file
+                String keyFile = params.getProperty("VERTICA_PEM_KEYFILE");
+                jsch.addIdentity(keyFile);
+                jschSession.connect();
+                return jschSession;
+            } catch (Exception e) {
+                LOG.error(e);
+                LOG.error("Trying again in 5 seconds");
+                Thread.sleep(5000L);
+            }
+        }
+        return null;
     }
 
     public void sftp(Properties params, String src, String dst) throws Exception {
@@ -54,7 +64,15 @@ public class SshUtil {
             if(channel.isClosed()){
                 if(in.available()>0) continue;
                 exitStatus = channel.getExitStatus();
-                LOG.info("exit-status: "+exitStatus);
+                if (exitStatus > 0) {
+                    LOG.error("!!!");
+                    LOG.error("!!! remote command failed!");
+                    LOG.error("!!! exit-status: " + exitStatus);
+                    LOG.error("!!!");
+                    Thread.sleep(1000L);
+                } else {
+                    LOG.info("exit-status: " + exitStatus);
+                }
                 break;
             }
             try{Thread.sleep(1000);}catch(Exception ee){}

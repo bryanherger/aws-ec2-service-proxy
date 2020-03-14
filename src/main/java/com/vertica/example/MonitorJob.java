@@ -19,29 +19,39 @@ public class MonitorJob implements Job {
     public void execute(JobExecutionContext context) throws JobExecutionException {
         // Say Hello to the World and display the date/time
         //Util.td();
+        JobDataMap jdm = context.getMergedJobDataMap();
+        Properties p = (Properties) jdm.get("params");
         int c = Util.countProxyThreads();
         LOG.info("Quartz cron job! "+c+" running proxy threads - " + new Date());
+        if (c == 0 && "terminate".equalsIgnoreCase(p.getProperty("stopBehavior"))) {
+            LOG.info("All proxy threads stopped! Terminating");
+            idleCount = 0;
+            latch = false;
+            AwsVerticaService avs = new AwsVerticaService();
+            avs.getClusterState(p);
+            avs.destroyServices(p);
+            AwsCloudProvider acp = new AwsCloudProvider();
+            acp.init(p);
+            acp.destroyInstances(p);
+            LOG.info("Instances terminated, check AWS console for details");
+            System.exit(0);
+        }
         if (c > 0) { latch =  true; idleCount = 0; }
-        if (c == 0 /*&& latch*/) {
+        if (c == 0 && latch) {
             LOG.info("All proxy threads stopped!");
             idleCount++;
-            if (idleCount > 0) {
-                LOG.info("All ProxyThread stopped for three checks, stopping instance");
-                JobDataMap jdm = context.getMergedJobDataMap();
-                /*AwsCloudProvider acp = new AwsCloudProvider();
-                acp.init((Properties) jdm.get("params"));
-                acp.stopInstances((Properties) jdm.get("params"));
+            if (idleCount > 3) {
+                // TODO: hibernate is probably better here, and make idleCount configurable
+                LOG.info("All ProxyThread stopped for three checks, terminating instances");
                 idleCount = 0;
-                latch = false;*/
-                Properties p = (Properties) jdm.get("params");
+                latch = false;
                 AwsVerticaService avs = new AwsVerticaService();
+                // get info for test
                 avs.destroyServices(p);
-                //AwsSpotInstanceManager asim = new AwsSpotInstanceManager();
-                //asim.terminateSpotInstances(p);
                 AwsCloudProvider acp = new AwsCloudProvider();
                 acp.init(p);
                 acp.destroyInstances(p);
-                System.exit(0);
+                LOG.info("Instances terminated, check AWS console for details");
             }
         }
     }
