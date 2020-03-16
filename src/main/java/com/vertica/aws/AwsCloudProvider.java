@@ -3,27 +3,30 @@ package com.vertica.aws;
 import com.fasterxml.jackson.databind.annotation.JsonAppend;
 import com.vertica.devops.AwsInstance;
 import com.vertica.devops.CloudProviderInterface;
+import com.vertica.devops.SshUtil;
 import org.apache.log4j.LogManager;
 import org.apache.log4j.Logger;
 import software.amazon.awssdk.services.ec2.Ec2Client;
 import software.amazon.awssdk.services.ec2.model.*;
 import software.amazon.awssdk.utils.StringUtils;
 
+import java.io.*;
 import java.util.*;
 
 // BH: creating an interface seemed like a good idea at the time, but I don't seem to be using it here
-public class AwsCloudProvider implements CloudProviderInterface {
+public class AwsCloudProvider {
     final static Logger LOG = LogManager.getLogger(AwsCloudProvider.class);
     private static Ec2Client ec2 = null;
     public List<AwsInstance> instances = new ArrayList<>();
     // quick lookup of instance Id based on private IP.  Allows Vertica functions to map nodes to instances by IP.
     public Map<String,String> instanceIdIpMap = new HashMap<>();
+    // this is the node in the primary cluster where we uploaded config file and private key so use this to manage instances via SSH/SFTP
+    public String sshVerticaNodeDns, sshVerticaNodeIp;
 
     public AwsCloudProvider() { }
 
     public AwsCloudProvider(Properties p) { init(p); }
-
-    @Override
+    
     public boolean init(Properties params) {
         System.setProperty("aws.accessKeyId", params.getProperty("awsAccessKeyID"));
         System.setProperty("aws.secretAccessKey", params.getProperty("awsSecretAccessKey"));
@@ -32,30 +35,11 @@ public class AwsCloudProvider implements CloudProviderInterface {
         return true;
     }
 
-    public boolean createVerticaNodes(Properties targets, String clusterName, int instanceCount, String instanceType) {
-        boolean finalState = false;
-        if (targets.containsKey("spotInstances")) {
-            finalState = createVerticaNodesSpot(targets, clusterName, instanceCount, instanceType);
-        } else {
-            finalState = createVerticaNodesOnDemand(targets, clusterName, instanceCount, instanceType);
-        }
-        finalState = configureInstances(targets);
-        return finalState;
-    }
-
-    private boolean createVerticaNodesSpot(Properties params, String clusterName, int instanceCount, String instanceType) {
-        String spotTagBaseName = params.getProperty("tagBaseName", "AwsVerticaDemo-" + System.currentTimeMillis());
-        params.setProperty("instanceTag", spotTagBaseName + "-SpotInstance");
-        params.setProperty("verticaDataTag", "subcluster::"+spotTagBaseName);
-        System.setProperty("aws.accessKeyId", params.getProperty("awsAccessKeyID"));
-        System.setProperty("aws.secretAccessKey", params.getProperty("awsSecretAccessKey"));
-        System.setProperty("aws.region", params.getProperty("awsRegion"));
-        Ec2Client ec2 = Ec2Client.builder().build();
-
+    private String createVerticaSecurityGroup(String groupName) {
         try {
             CreateSecurityGroupRequest securityGroupRequest = CreateSecurityGroupRequest.builder()
-                    .groupName(spotTagBaseName+"-SpotSecurityGroup")
-                    .description(spotTagBaseName+" Spot Security Group")
+                    .groupName(groupName)
+                    .description(groupName)
                     .build();
             ec2.createSecurityGroup(securityGroupRequest);
         } catch (Exception ase) {
@@ -82,15 +66,47 @@ public class AwsCloudProvider implements CloudProviderInterface {
         try {
             // Authorize the ports to the used.
             AuthorizeSecurityGroupIngressRequest ingressRequest =
-                    AuthorizeSecurityGroupIngressRequest.builder().groupName(spotTagBaseName+"-SpotSecurityGroup").ipPermissions(ipPermissions).build();
+                    AuthorizeSecurityGroupIngressRequest.builder().groupName(groupName).ipPermissions(ipPermissions).build();
             ec2.authorizeSecurityGroupIngress(ingressRequest);
         } catch (Exception ase) {
             // Ignore because this likely means the zone has
             // already been authorized.
             System.out.println(ase.getMessage());
         }
+
+        return groupName;
+    }
+
+    public boolean createVerticaNodes(Properties targets, String clusterName, int instanceCount, String instanceType) {
+        boolean finalState = false;
+        List<String> instanceIds = null;
+        if (targets.containsKey("spotInstances")) {
+            instanceIds = createVerticaNodesSpot(targets, clusterName, instanceCount, instanceType);
+        } else {
+            instanceIds = createVerticaNodesOnDemand(targets, clusterName, instanceCount, instanceType);
+        }
+        /* TODO: we don't have the right info here to connect, though this is probably where we should configure
+        if (instanceIds != null) {
+            finalState = configureInstances(targets, instanceIds);
+        }
+         */
+        return finalState;
+    }
+
+    private List<String> createVerticaNodesSpot(Properties params, String clusterName, int instanceCount, String instanceType) {
+        String spotTagBaseName = params.getProperty("tagBaseName", "AwsVerticaDemo-" + System.currentTimeMillis());
+        params.setProperty("instanceTag", spotTagBaseName + "-SpotInstance");
+        params.setProperty("verticaDataTag", "subcluster::"+spotTagBaseName);
+        System.setProperty("aws.accessKeyId", params.getProperty("awsAccessKeyID"));
+        System.setProperty("aws.secretAccessKey", params.getProperty("awsSecretAccessKey"));
+        System.setProperty("aws.region", params.getProperty("awsRegion"));
+        //Ec2Client ec2 = Ec2Client.builder().build();
+        String verticaSecurityGroup = params.getProperty("verticaSecurityGroup");
+        if (StringUtils.isEmpty(verticaSecurityGroup)) {
+            verticaSecurityGroup = createVerticaSecurityGroup(spotTagBaseName + "-SpotSecurityGroup");
+        }
         ArrayList<String> securityGroups = new ArrayList<>();
-        securityGroups.add(spotTagBaseName+"-SpotSecurityGroup");
+        securityGroups.add(verticaSecurityGroup);
         // Add the launch specifications to the request. Use Vertica AMI here...
         InstanceType spotInstanceType = StringUtils.isEmpty(instanceType)?InstanceType.C5_LARGE:InstanceType.fromValue(instanceType);
         RequestSpotLaunchSpecification launchSpecification = RequestSpotLaunchSpecification.builder()
@@ -109,7 +125,7 @@ public class AwsCloudProvider implements CloudProviderInterface {
         // Add all of the request ids to the hashset, so we can determine when they hit the
         // active state.
         for (SpotInstanceRequest requestResponse : requestResponses) {
-            System.out.println("Created Spot Request: "+requestResponse.spotInstanceRequestId());
+            LOG.info("Created Spot Request: "+requestResponse.spotInstanceRequestId());
             spotInstanceRequestIds.add(requestResponse.spotInstanceRequestId());
         }
         params.setProperty("spotInstanceRequestIds",String.join(";;",spotInstanceRequestIds));
@@ -161,26 +177,38 @@ public class AwsCloudProvider implements CloudProviderInterface {
             }
         } while (anyOpen);
         // end step 4
+        /*try {
+            // Sleep for 5 seconds to allow instances to start.
+            Thread.sleep(5*1000L);
+            // commented because startup doesn't seem to be the reason getInstancesByTag isn't finding all instances
+        } catch (Exception e) {
+            // Do nothing because it woke up early.
+        }*/
         // assuming everything worked, let's tag the instances for later actions
+        LOG.info("Instances to tag: "+spotInstanceIds.size());
+        if (spotInstanceIds.size() != instanceCount) {
+            LOG.error("=== expecting "+instanceCount+" instances, but only found "+spotInstanceIds.size());
+        }
         Tag spotTag = Tag.builder().key("instanceTag").value(params.getProperty("instanceTag")).build();
         Tag spotServiceTag = Tag.builder().key("Service").value(params.getProperty("serviceTag")).build();
         CreateTagsRequest ctr = CreateTagsRequest.builder().resources(spotInstanceIds).tags(spotTag,spotServiceTag).build();
-        ec2.createTags(ctr);
+        CreateTagsResponse ctresp = ec2.createTags(ctr);
+        LOG.info("create tags response: "+ctresp.toString()+","+ctresp.toBuilder().toString());
         String ids = String.join(";;", spotInstanceIds);
-        LOG.error("Got spot IDs: "+ids);
+        LOG.info("Got spot IDs: "+ids);
         params.setProperty("spotInstanceIds", ids);
         // update instance data
-        getInstances(params);
-        return false;
+        getInstancesById(spotInstanceIds);
+        return new ArrayList<String>(spotInstanceIds);
     }
 
-    private boolean createVerticaNodesOnDemand(Properties params, String clusterName, int instanceCount, String instanceType) {
+    private List<String> createVerticaNodesOnDemand(Properties params, String clusterName, int instanceCount, String instanceType) {
         // check for and revive hibernated instances, otherwise create new
-        return false;
+        return null;
     }
 
-    @Override
-    public boolean createInstances(Properties targets) {
+    /*@Deprecated
+    private boolean createInstances(Properties targets) {
         boolean finalState = false;
         if (targets.containsKey("spotInstances")) {
             finalState = createSpotInstances(targets);
@@ -191,6 +219,7 @@ public class AwsCloudProvider implements CloudProviderInterface {
         return finalState;
     }
 
+    @Deprecated
     private boolean createSpotInstances(Properties params) {
         String spotTagBaseName = params.getProperty("tagBaseName", "AwsVerticaDemo-" + System.currentTimeMillis());
         params.setProperty("instanceTag", spotTagBaseName + "-SpotInstance");
@@ -320,22 +349,71 @@ public class AwsCloudProvider implements CloudProviderInterface {
         return false;
     }
 
+    @Deprecated
     private boolean createOnDemandInstances(Properties params) {
         // check for and revive hibernated instances, otherwise create new
         return false;
-    }
+    }*/
 
-    public boolean configureInstances(Properties params) {
+    public boolean configureInstances(Properties params, Collection<String> instanceIds) {
         // TODO: this will do stuff like further network config, mount volumes, etc.
+        for (String instanceId : instanceIds) {
+            provisionInstanceDAS(params, instanceId);
+        }
         return false;
     }
 
     // configure LVM for types with Direct Attached Storage, e.g. i3.4xlarge
-    public boolean provisionInstanceDAS(Properties params) {
+    public boolean provisionInstanceDAS(Properties params, String instancePublicIp) {
+        LOG.info("Configuring "+instancePublicIp);
+        SshUtil ssh = new SshUtil();
+        // create LVM, format and mount under /vertica, fix permissions
+        List<String> commands = new ArrayList<String>();
+        String node = params.getProperty("node");
+        params.setProperty("node", instancePublicIp);
+        // create /vertica as mount point for ephemeral volume(s) / LVM
+        try { ssh.ssh(params, "sudo mkdir /vertica"); } catch (Exception e) { LOG.error("Exception in provisionInstanceDAS:"+e.getMessage(),e); }
+        try {
+            List<String> lvmBlockDevices = new ArrayList<>();
+            String lsblk = ssh.sshWithOutput(params, "lsblk");
+            BufferedReader br = new BufferedReader(new StringReader(lsblk));
+            String thisLine = null;
+            while ((thisLine = br.readLine()) != null) {
+                String[] tokens = thisLine.split("\\s+");
+                LOG.info(String.join(",",tokens));
+                boolean lvm = false;
+                if (thisLine.contains(" disk ")) {
+                    thisLine = thisLine + " (disk)";
+                }
+                if (thisLine.contains("nvme")) {
+                    thisLine = thisLine + " (nvme)";
+                    LOG.info("add to lvm: "+tokens[0]); lvm = true; lvmBlockDevices.add("/dev/"+tokens[0]);
+                }
+                if (thisLine.contains("ephemeral")) {
+                    thisLine = thisLine + " (hdd/ssd)";
+                    LOG.info("add to lvm: "+tokens[0]); lvm = true; lvmBlockDevices.add("/dev/"+tokens[0]);
+                }
+                if (thisLine.contains("/")) {
+                    thisLine = thisLine + " (mounted)";
+                    if (lvm) { LOG.info("Will first umount "+tokens[6]); }
+                }
+                LOG.warn(thisLine);
+            }
+            ssh.ssh(params, "sudo pvcreate "+String.join(" ", lvmBlockDevices));
+            ssh.ssh(params, "sudo vgcreate vg_vertica "+String.join(" ", lvmBlockDevices));
+            ssh.ssh(params, "sudo lvcreate -l 100%VG -n lv_vertica vg_vertica");
+            ssh.ssh(params, "sudo mkfs.ext4 /dev/vg_vertica/lv_vertica");
+            ssh.ssh(params, "sudo mount /dev/vg_vertica/lv_vertica /vertica");
+            ssh.ssh(params, "df -h");
+            ssh.ssh(params, "sudo chown -R dbadmin:verticadba /vertica");
+            //sudo  mkfs.ext3 /dev/vol_grp1/logical_vol1
+        } catch (Exception e) {
+            LOG.error("Exception in provisionInstanceDAS:"+e.getMessage(),e);
+        }
+        params.setProperty("node", node);
         return false;
     }
 
-    @Override
     public boolean startInstances(Properties targets) {
         String targetState = "running";
         List<String> instanceIds = Arrays.asList(targets.getProperty("instances").split(";;"));
@@ -359,8 +437,7 @@ public class AwsCloudProvider implements CloudProviderInterface {
     }
 
     // this also updates the class listing of instances
-    @Override
-    public String getInstances(Properties targets) {
+    public String getInstancesByTag(Properties targets) {
         String nextToken = null;
         String filterData = targets.getProperty("instanceTag");
         Filter filter = Filter.builder().name("tag:instanceTag").values(filterData).build();
@@ -368,9 +445,36 @@ public class AwsCloudProvider implements CloudProviderInterface {
         List<String> instances = new ArrayList<>();
         List<AwsInstance> awsInstances = new ArrayList<>();
         do {
-            DescribeInstancesRequest request = DescribeInstancesRequest.builder().filters(filter).nextToken(nextToken).build();
+            DescribeInstancesRequest request = DescribeInstancesRequest.builder().filters(filter).maxResults(1000)/*.nextToken(nextToken)*/.build();
             DescribeInstancesResponse response = ec2.describeInstances(request);
+            LOG.info("response.reservations()="+response.reservations().size());
             for (Reservation reservation : response.reservations()) {
+                LOG.info("For reservation ["+reservation.toString()+"], reservation.instances()="+reservation.instances().size());
+                for (Instance instance : reservation.instances()) {
+                    LOG.info(instance.instanceId()+","+instance.privateIpAddress()+","+instance.tags());
+                    instances.add(instance.instanceId());
+                    awsInstances.add(new AwsInstance(instance));
+                    instanceIdIpMap.put(instance.privateIpAddress(), instance.instanceId());
+                }
+            }
+            nextToken = response.nextToken();
+        } while (nextToken != null);
+        // replace existing list
+        this.instances = awsInstances;
+        return String.join(";;", instances);
+    }
+
+    // must be a Set<String>, even if a single entry
+    public String getInstancesById(Set<String> targets) {
+        String nextToken = null;
+        List<String> instances = new ArrayList<>();
+        List<AwsInstance> awsInstances = new ArrayList<>();
+        do {
+            DescribeInstancesRequest request = DescribeInstancesRequest.builder().instanceIds(targets).nextToken(nextToken).build();
+            DescribeInstancesResponse response = ec2.describeInstances(request);
+            LOG.info("response.reservations()="+response.reservations().size());
+            for (Reservation reservation : response.reservations()) {
+                LOG.info("For reservation ["+reservation.toString()+"], reservation.instances()="+reservation.instances().size());
                 for (Instance instance : reservation.instances()) {
                     LOG.info(instance.instanceId()+","+instance.privateIpAddress()+","+instance.tags());
                     instances.add(instance.instanceId());
@@ -386,7 +490,6 @@ public class AwsCloudProvider implements CloudProviderInterface {
     }
 
     // return pattern: [instanceId,stateName,computedState,publicDns,privateDns]
-    @Override
     public String checkState(Properties targets) {
         if (targets.containsKey("spotInstances")) {
             return checkSpotState(targets);
@@ -395,7 +498,7 @@ public class AwsCloudProvider implements CloudProviderInterface {
         }
     }
 
-    public String checkOnDemandState(Properties targets) {
+    private String checkOnDemandState(Properties targets) {
         List<String> instanceIds = Arrays.asList(targets.getProperty("instances").split(";;"));
         String targetState = null;
         if (targets.contains("targetState")) {
@@ -426,7 +529,7 @@ public class AwsCloudProvider implements CloudProviderInterface {
         return String.join(";;", fresponse);
     }
 
-    public String checkSpotState(Properties params) {
+    private String checkSpotState(Properties params) {
         LOG.info("Spot instance request Id's: "+params.getProperty("spotInstanceRequestIds"));
         LOG.info("Spot instance Id's: "+params.getProperty("spotInstanceIds"));
         List<String> instanceIds = Arrays.asList(params.getProperty("spotInstanceIds").split(";;"));
@@ -438,6 +541,7 @@ public class AwsCloudProvider implements CloudProviderInterface {
             DescribeInstancesResponse response = ec2.describeInstances(request);
             for (Reservation reservation : response.reservations()) {
                 for (Instance instance : reservation.instances()) {
+                    LOG.warn(instance.toString());
                     String isr = instance.stateReason()!=null?"(msg)"+instance.stateReason().message():"(sTR)"+instance.stateTransitionReason();
                     fresponse.add(instance.instanceId()+"|"+instance.state().name()+"|"+isr+"|"+instance.publicDnsName()+"|"+instance.privateDnsName());
                 }
@@ -447,24 +551,22 @@ public class AwsCloudProvider implements CloudProviderInterface {
         return String.join(";;", fresponse);
     }
 
-    @Override
     public boolean alterInstances(Properties targets) {
         return false;
     }
 
-    public boolean tagInstance(String instanceId, String tagKey, String tagValue) {
+    public boolean tagInstances(List<String> instanceIds, String tagKey, String tagValue) {
         Tag newTag = Tag.builder().key(tagKey).value(tagValue).build();
-        CreateTagsRequest ctr = CreateTagsRequest.builder().resources(instanceId).tags(newTag).build();
+        CreateTagsRequest ctr = CreateTagsRequest.builder().resources(instanceIds).tags(newTag).build();
         ec2.createTags(ctr);
         return false;
     }
 
-    @Override
     public boolean stopInstances(Properties targets) {
         String targetState = "stopped";
         List<String> instanceIds = Arrays.asList(targets.getProperty("instances").split(";;"));
-        StopInstancesRequest request = StopInstancesRequest.builder()
-                .instanceIds(instanceIds).hibernate(true).build();
+        boolean hibernate = "hibernate".equalsIgnoreCase(targets.getProperty("stopBehavior"));
+        StopInstancesRequest request = StopInstancesRequest.builder().instanceIds(instanceIds).hibernate(hibernate).build();
         ec2.stopInstances(request);
         targets.setProperty("targetState",targetState);
         try {
@@ -482,7 +584,6 @@ public class AwsCloudProvider implements CloudProviderInterface {
         return true;
     }
 
-    @Override
     public boolean destroyInstances(Properties targets) {
         if (targets.containsKey("spotInstances")) {
             return destroySpotInstances(targets);

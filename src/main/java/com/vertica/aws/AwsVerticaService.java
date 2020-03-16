@@ -112,7 +112,7 @@ public class AwsVerticaService implements CloudServiceInterface {
             return false;
         }
         // example from docs.  TODO: read parameters and substitute
-        String addSubcluster = "sudo -u dbadmin /opt/vertica/bin/admintools -t db_add_subcluster -s 10.11.12.117,10.11.12.251,10.11.12.193   --is-secondary";
+        String addSubcluster = "sudo -u dbadmin /opt/vertica/bin/admintools -t db_add_subcluster -s 10.11.12.117,10.11.12.251,10.11.12.193 --is-secondary";
         try {
             ssh.ssh(targets, addSubcluster);
         } catch (Exception e) {

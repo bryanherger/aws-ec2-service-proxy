@@ -26,4 +26,10 @@ public class AwsInstance {
         this.state = instance.stateReason()!=null?"(msg)"+instance.stateReason().message():"(sTR)"+instance.stateTransitionReason();
         this.isSpot = (StringUtils.isEmpty(instance.spotInstanceRequestId())?false:true);
     }
+
+    @Override
+    public String toString() {
+        return this.instanceId+";"+this.publicIp+";"+this.privateIp;
+    }
+
 }

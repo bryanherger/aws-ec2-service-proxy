@@ -5,6 +5,7 @@ import org.apache.log4j.LogManager;
 import org.apache.log4j.Logger;
 
 import java.io.InputStream;
+import java.util.List;
 import java.util.Properties;
 
 public class SshUtil {
@@ -26,7 +27,8 @@ public class SshUtil {
                 jschSession.connect();
                 return jschSession;
             } catch (Exception e) {
-                LOG.error(e);
+                e.printStackTrace();
+                LOG.error(e.getMessage(), e);
                 LOG.error("Trying again in 5 seconds");
                 Thread.sleep(5000L);
             }
@@ -80,5 +82,46 @@ public class SshUtil {
         channel.disconnect();
         jschSession.disconnect();
         return exitStatus;
+    }
+
+    public String sshWithOutput(Properties params, String command) throws Exception {
+        int exitStatus = -1;
+        Session jschSession = getConnection(params);
+        LOG.info("SSH EXEC: "+command);
+        Channel channel=jschSession.openChannel("exec");
+        ((ChannelExec)channel).setCommand(command);
+        channel.setInputStream(null);
+        ((ChannelExec)channel).setErrStream(System.err);
+        InputStream in=channel.getInputStream();
+        channel.connect();
+        String output = "";
+        byte[] tmp=new byte[1024];
+        while(true){
+            while(in.available()>0){
+                int i=in.read(tmp, 0, 1024);
+                if(i<0)break;
+                String thisBatch = new String(tmp, 0, i);
+                LOG.info(thisBatch);
+                output = output + thisBatch;
+            }
+            if(channel.isClosed()){
+                if(in.available()>0) continue;
+                exitStatus = channel.getExitStatus();
+                if (exitStatus > 0) {
+                    LOG.error("!!!");
+                    LOG.error("!!! remote command failed!");
+                    LOG.error("!!! exit-status: " + exitStatus);
+                    LOG.error("!!!");
+                    throw new Exception("ssh failed with exit-status: "+exitStatus);
+                } else {
+                    LOG.info("exit-status: " + exitStatus);
+                }
+                break;
+            }
+            try{Thread.sleep(1000);}catch(Exception ee){}
+        }
+        channel.disconnect();
+        jschSession.disconnect();
+        return output;
     }
 }

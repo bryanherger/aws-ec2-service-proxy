@@ -111,31 +111,41 @@ public class AwsVerticaDemo {
         acp.init(params);
         params.setProperty("serviceTag","VerticaSpotDemo");
         //acp.createInstances(params);
-        acp.createVerticaNodes(params, "default", 6, "c5.large");
+        acp.createVerticaNodes(params, "default", 3, /*"c5.large"*/"i3.4xlarge");
+        LOG.info("First instance (out of "+acp.instances.size()+") of first cluster: "+acp.instances.get(0).toString());
+        String publicIp = acp.instances.get(0).publicDns;
         String asimss = acp.checkState(params);
         LOG.info("spot state: "+asimss);
-        String publicIp = null;
         List<String> ips = new ArrayList<>();
+        List<String> publicIps = new ArrayList<>();
         for (String ip : asimss.split(";;")) {
             String findDns[] = ip.split("\\|");
             if (findDns.length == 5 && !StringUtils.isEmpty(findDns[4])) {
                 LOG.info("private IP: "+findDns[4]);
+                publicIps.add(findDns[3]);
                 ips.add(findDns[4]);
-                publicIp = findDns[3];
             }
         }
         try { Thread.sleep(10000L); } catch (Exception e) { }
-        LOG.info("Using public IP (last node): "+publicIp);
+        LOG.info("Using public IP or DNS: "+publicIp);
         try {
             params.setProperty("node", publicIp);
             params.setProperty("allNodes", String.join(",", ips));
+            // configure instances
+            acp.configureInstances(params, publicIps);
+            // install and start DB
+            /*
             AwsVerticaService avs = new AwsVerticaService();
             avs.installVertica(params);
+            // stop DB
+            avs.destroyServices(params);
+            */
         } catch (Exception e) {
             LOG.error(e.getMessage(), e);
         }
         // let the scheduler kill the instances
         params.setProperty("stopBehavior","terminate");
+        acp.destroyInstances(params);
         //scheduleInit(params);
         //try { LOG.error("Waiting 600 seconds before exiting!"); Thread.sleep(600L*1000L); } catch (Exception e) { }
     }
@@ -144,7 +154,7 @@ public class AwsVerticaDemo {
         AwsCloudProvider acp = new AwsCloudProvider();
         acp.init(params);
         params.setProperty("instanceTag","Service=VHibernateDemo");
-        String instances = acp.getInstances(params);
+        String instances = acp.getInstancesByTag(params);
         LOG.info("instances: "+instances);
         params.setProperty("instances", instances);
         acp.startInstances(params);
