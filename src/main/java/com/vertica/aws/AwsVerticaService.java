@@ -1,9 +1,6 @@
 package com.vertica.aws;
 
-import com.vertica.devops.CloudServiceInterface;
-import com.vertica.devops.SshUtil;
-import com.vertica.devops.VerticaNode;
-import com.vertica.devops.VerticaNodeGroup;
+import com.vertica.devops.*;
 import org.apache.log4j.LogManager;
 import org.apache.log4j.Logger;
 
@@ -102,9 +99,21 @@ public class AwsVerticaService implements CloudServiceInterface {
     public boolean eonAddSubcluster(Properties targets, String scName, List<String> hostIps) {
         SshUtil ssh = new SshUtil();
         // ask the cloud provider class to create instances
-        String addInstances = null;
+        if (hostIps == null) {
+            AwsCloudProvider acp = new AwsCloudProvider();
+            acp.init(targets);
+            acp.createVerticaNodes(targets, scName, 3, "i3.4xlarge");
+            hostIps = new ArrayList<>(acp.instanceIdIpMap.keySet());
+            List<String> publicIps = new ArrayList<>();
+            for (AwsInstance i : acp.instances) {
+                publicIps.add(i.publicDns);
+            }
+            acp.configureInstances(targets, publicIps);
+        }
+        String addHosts = String.join(",",hostIps);
+        LOG.info("Add subcluster "+scName+" with instances at "+addHosts);
         // install_vertica to add nodes
-        String addNodes = "sudo /opt/vertica/sbin/install_vertica -i /tmp/keyfile.pem -d /vertica --add-hosts 172.31.12.160,172.31.1.177,172.31.10.52 --failure-threshold NONE";
+        String addNodes = "sudo /opt/vertica/sbin/install_vertica -i /tmp/keyfile.pem -d /vertica --add-hosts "+addHosts+" --failure-threshold NONE";
         try {
             ssh.ssh(targets, addNodes);
         } catch (Exception e) {
@@ -112,7 +121,7 @@ public class AwsVerticaService implements CloudServiceInterface {
             return false;
         }
         // example from docs.  TODO: read parameters and substitute
-        String addSubcluster = "sudo -u dbadmin /opt/vertica/bin/admintools -t db_add_subcluster -s 10.11.12.117,10.11.12.251,10.11.12.193 --is-secondary";
+        String addSubcluster = "sudo -u dbadmin /opt/vertica/bin/admintools -t db_add_subcluster -s "+addHosts+" --is-secondary -c "+scName+" -d "+targets.getProperty("DBNAME")+" -p "+targets.getProperty("DBPASS");
         try {
             ssh.ssh(targets, addSubcluster);
         } catch (Exception e) {
@@ -122,6 +131,53 @@ public class AwsVerticaService implements CloudServiceInterface {
         // update cluster data
         getClusterState(targets);
 
+        return true;
+    }
+
+    // manage subclusters: provision instances and Vertica on new secondary subcluster to be used for proxy queries
+    public boolean eonAddProxySubcluster(Properties targets, String scName, int nodeCount, String nodeType) {
+        SshUtil ssh = new SshUtil();
+        // ask the cloud provider class to create instances
+        AwsCloudProvider acp = new AwsCloudProvider();
+        acp.init(targets);
+        acp.createVerticaNodes(targets, scName, nodeCount, nodeType);
+        List<String> hostIps = new ArrayList<>();
+        List<String> publicIps = new ArrayList<>();
+        List<String> toTag = new ArrayList<>();
+        for (AwsInstance i : acp.instances) {
+            hostIps.add(i.privateIp);
+            publicIps.add(i.publicDns);
+            toTag.add(i.instanceId);
+            // this will choose the last one...
+            targets.setProperty("scnode",i.publicDns);
+        }
+        acp.tagInstances(toTag, "Name", "Vertica-"+scName);
+        acp.configureInstances(targets, publicIps);
+        String addHosts = String.join(",",hostIps);
+        LOG.info("Add subcluster "+scName+" with instances at "+addHosts);
+        // install_vertica to add nodes
+        //String dbuser = targets.getProperty("DBUSER");
+        //targets.setProperty("DBUSER","ec2-user");
+        String addNodes = "sudo /opt/vertica/sbin/install_vertica -i /tmp/keyfile.pem -d /vertica --add-hosts "+addHosts+" --failure-threshold NONE";
+        LOG.info(addNodes);
+        try {
+            ssh.ssh(targets, addNodes);
+        } catch (Exception e) {
+            LOG.error(e);
+            return false;
+        }
+        // example from docs.  TODO: read parameters and substitute
+        String addSubcluster = "sudo -u dbadmin /opt/vertica/bin/admintools -t db_add_subcluster -s "+addHosts+" --is-secondary -c "+scName+" -d "+targets.getProperty("DBNAME")+" -p "+targets.getProperty("DBPASS");
+        LOG.info(addSubcluster);
+        try {
+            ssh.ssh(targets, addSubcluster);
+        } catch (Exception e) {
+            LOG.error(e);
+            return false;
+        }
+        // update cluster data
+        getClusterState(targets);
+        //targets.setProperty("DBUSER",dbuser);
         return true;
     }
 

@@ -62,6 +62,8 @@ public class AwsCloudProvider {
         ipPermissions.add(ipPermission);
         ipPermission = IpPermission.builder().ipProtocol("-1").ipRanges(IpRange.builder().cidrIp("172.31.0.0/16").build()).build();
         ipPermissions.add(ipPermission);
+        ipPermission = IpPermission.builder().ipProtocol("-1").ipRanges(IpRange.builder().cidrIp("10.11.12.0/24").build()).build();
+        ipPermissions.add(ipPermission);
 
         try {
             // Authorize the ports to the used.
@@ -94,8 +96,9 @@ public class AwsCloudProvider {
     }
 
     private List<String> createVerticaNodesSpot(Properties params, String clusterName, int instanceCount, String instanceType) {
-        String spotTagBaseName = params.getProperty("tagBaseName", "AwsVerticaDemo-" + System.currentTimeMillis());
+        String spotTagBaseName = params.getProperty("tagBaseName", "AwsVerticaDemo");
         params.setProperty("instanceTag", spotTagBaseName + "-SpotInstance");
+        params.setProperty("serviceTag", spotTagBaseName + "-Vertica");
         params.setProperty("verticaDataTag", "subcluster::"+spotTagBaseName);
         System.setProperty("aws.accessKeyId", params.getProperty("awsAccessKeyID"));
         System.setProperty("aws.secretAccessKey", params.getProperty("awsSecretAccessKey"));
@@ -115,7 +118,7 @@ public class AwsCloudProvider {
                 .securityGroups(securityGroups)
                 .keyName(params.getProperty("awsKeyPairName")).build();
         // Request instance with a bid price
-        RequestSpotInstancesRequest requestRequest = RequestSpotInstancesRequest.builder().instanceCount(instanceCount).launchSpecification(launchSpecification).build();
+        RequestSpotInstancesRequest requestRequest = RequestSpotInstancesRequest.builder().availabilityZoneGroup("us-east-1d").instanceCount(instanceCount).launchSpecification(launchSpecification).build();
         // Call the RequestSpotInstance API.
         RequestSpotInstancesResponse requestResult = ec2.requestSpotInstances(requestRequest);
         List<SpotInstanceRequest> requestResponses = requestResult.spotInstanceRequests();
@@ -199,7 +202,7 @@ public class AwsCloudProvider {
         params.setProperty("spotInstanceIds", ids);
         // update instance data
         getInstancesById(spotInstanceIds);
-        return new ArrayList<String>(spotInstanceIds);
+        return new ArrayList<>(spotInstanceIds);
     }
 
     private List<String> createVerticaNodesOnDemand(Properties params, String clusterName, int instanceCount, String instanceType) {
@@ -434,6 +437,12 @@ public class AwsCloudProvider {
             e.printStackTrace(); return false;
         }
         return true;
+    }
+
+    public void startInstances(List<String> instanceIds) {
+        StartInstancesRequest request = StartInstancesRequest.builder()
+                .instanceIds(instanceIds).build();
+        ec2.startInstances(request);
     }
 
     // this also updates the class listing of instances

@@ -6,6 +6,7 @@ import com.jcraft.jsch.*;
 import com.vertica.aws.AwsCloudProvider;
 import com.vertica.aws.AwsSpotInstanceManager;
 import com.vertica.aws.AwsVerticaService;
+import com.vertica.devops.AwsInstance;
 import com.vertica.devops.SshUtil;
 import org.apache.log4j.*;
 import org.apache.log4j.Logger;
@@ -15,9 +16,7 @@ import software.amazon.awssdk.utils.StringUtils;
 
 import java.io.*;
 import java.net.ServerSocket;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Properties;
+import java.util.*;
 
 import static org.quartz.CronScheduleBuilder.cronSchedule;
 import static org.quartz.JobBuilder.newJob;
@@ -74,8 +73,10 @@ public class AwsVerticaDemo {
         params.setProperty("awsRegion", awsRegion);
         params.setProperty("awsKeyPairName", awsKeyPairName);
         params.setProperty("awsS3Bucket", args.communalStorage);
+        params.setProperty("DBPRIMARY", args.primarySubcluster);
         params.setProperty("DBSECONDARY", args.secondarySubcluster);
-        params.setProperty("VERTICA_PEM_KEYFILE", VERTICA_PEM_KEYFILE);
+        params.setProperty("VERTICA_PEM_KEYFILE", (StringUtils.isEmpty(args.sshIdentityFile)?AwsVerticaDemo.VERTICA_PEM_KEYFILE:args.sshIdentityFile));
+        params.setProperty("DBCONTROLNODE", args.sshNode);
         params.setProperty("DBNAME", DBNAME);
         params.setProperty("DBPORT", DBPORT);
         params.setProperty("DBPASS", DBPASS);
@@ -92,12 +93,14 @@ public class AwsVerticaDemo {
         }
         if (args.proxyPorts != null && args.proxyPorts.contains(":")) {
             params.setProperty("DBPROXY", args.proxyPorts);
-        } else {
-            params.setProperty("DBPROXY", DBPROXY);
+            proxyDemoEon(params);
+            System.exit(0);
         }
         if ("proxy".equalsIgnoreCase(args.demoMode)) {
+            params.setProperty("DBPROXY", DBPROXY);
             proxyDemo(params);
         } else if ("proxydemo".equalsIgnoreCase(args.demoMode)) {
+            params.setProperty("DBPROXY", DBPROXY);
             proxyDemo(params);
         } else {
             spotInstanceDemo(params);
@@ -134,12 +137,22 @@ public class AwsVerticaDemo {
             // configure instances
             acp.configureInstances(params, publicIps);
             // install and start DB
-            /*
+            /* */
             AwsVerticaService avs = new AwsVerticaService();
             avs.installVertica(params);
+            // how fast can we add a subcluster?
+            LOG.error("Start adding ondemand-subcluster");
+            avs.eonAddSubcluster(params, "ondemand-subcluster", null);
+            LOG.error("Finish adding ondemand-subcluster");
+            // tests
+            avs.runQuery(params, "SELECT REBALANCE_SHARDS();");
+            avs.runQuery(params, "SELECT * FROM NODES;");
+            // remove
+            avs.eonRemoveSubcluster(params, "ondemand-subcluster");
+            avs.runQuery(params, "SELECT REBALANCE_SHARDS();");
             // stop DB
             avs.destroyServices(params);
-            */
+            /* */
         } catch (Exception e) {
             LOG.error(e.getMessage(), e);
         }
@@ -195,6 +208,80 @@ public class AwsVerticaDemo {
         LOG.info(acp.checkState(params));
     }
 
+    // Eon mode proxy demo:
+    public static void proxyDemoEon(Properties params) throws Exception {
+        if (!StringUtils.isEmpty(params.getProperty("DBPRIMARY"))) {
+            String dbPrimary = params.getProperty("DBPRIMARY");
+            LOG.info("Contacting AWS API for info on: "+dbPrimary);
+            String[] pargs = dbPrimary.split(":");
+            AwsCloudProvider aws = new AwsCloudProvider(); aws.init(params);
+            // revive primary cluster if needed
+            boolean revive = false;
+            do {
+                revive = false;
+                aws.getInstancesById(new HashSet<String>(Arrays.asList(pargs[1].split("\\,"))));
+                for (AwsInstance a : aws.instances) {
+                    if (a.publicIp == null) {
+                        LOG.error("DOWN (" + a + "): " + a.state);
+                        revive = true;
+                        break;
+                    }
+                }
+                if (revive) {
+                    aws.startInstances(Arrays.asList(pargs[1].split("\\,")));
+                    try { Thread.sleep(5000L); } catch (Exception e) { }
+                }
+            } while (revive);
+            String dbControlNode = aws.instances.get(0).publicDns;
+            params.setProperty("DBCONTROLNODE", dbControlNode);
+            LOG.info("Primary subcluster is ready and we will use node: "+dbControlNode);
+        }
+        // check required settings
+        if (StringUtils.isEmpty(params.getProperty("DBCONTROLNODE"))) {
+            LOG.error("Need to specify a control node in an existing primary subcluster");
+            return;
+        }
+        params.setProperty("node", params.getProperty("DBCONTROLNODE"));
+        AwsVerticaService avs = new AwsVerticaService();
+        if (!StringUtils.isEmpty(params.getProperty("DBSECONDARY"))) {
+            LOG.warn("We will create and manage a secondary subcluster on spot instances to handle queries");
+            // name:nodeCount:instanceType
+            String[] secondary = params.getProperty("DBSECONDARY").split(":");
+            LOG.info("subcluster "+secondary[0]+" will have "+secondary[1]+"x "+secondary[2]);
+            // TODO: add secondary subcluster metadata so monitor job will have it
+            params.setProperty("secondarySubcluster",secondary[0]);
+            params.setProperty("instanceTag", "SecondarySC-SpotInstance");
+            params.setProperty("serviceTag", "SecondarySC-Spot-Vertica");
+            avs.eonAddProxySubcluster(params, secondary[0], Integer.parseInt(secondary[1]), secondary[2]);
+            // TODO: now set the control node (proxy target) to the new secondary subcluster
+            params.setProperty("node", params.getProperty("scnode"));
+            LOG.info("ACP selected proxy destination node: "+params.getProperty("node"));
+            avs.checkState(params);
+            // TODO: init scheduler so monitor threads and stop subcluster as needed
+            // scheduleInit(params);
+            // well, just stop here for now
+            avs.eonRemoveSubcluster(params, secondary[0]);
+            AwsCloudProvider aws = new AwsCloudProvider(); aws.init(params); aws.destroyInstances(params);
+            System.exit(34);
+        }
+        if (!StringUtils.isEmpty(params.getProperty("node"))) {
+            avs.checkState(params);
+            //scheduleInit(params);
+            String[] proxyPorts = params.getProperty("DBPROXY").split(":");
+            int localport = Integer.parseInt(proxyPorts[0]);
+            int remoteport = Integer.parseInt(proxyPorts[1]);
+            // Print a start-up message
+            System.out.println("Starting proxy for " + params.getProperty("node") + ":" + remoteport
+                    + " on local port " + localport);
+            ServerSocket server = new ServerSocket(localport);
+            while (true) {
+                new ThreadProxy(server.accept(), params.getProperty("node"), remoteport);
+            }
+        } else {
+            LOG.error("No running Vertica node found!");
+        }
+    }
+
     public static void scheduleInit(Properties params) {
         try {
             SchedulerFactory sf = new StdSchedulerFactory();
@@ -211,7 +298,7 @@ public class AwsVerticaDemo {
             sched.start();
             LOG.info("--- Started Scheduler");
         } catch (Exception e) {
-            e.printStackTrace();
+            LOG.error(e.getMessage(), e);
         }
     }
 
@@ -264,19 +351,25 @@ public class AwsVerticaDemo {
 class Args {
     // command line parsing: see http://jcommander.org/#_overview
     // in the help output from usage(), it looks like options are printed in order of long option name, regardless of order here
-    @Parameter(names = {"-p","--properties"}, description = "Properties file (java.util.Properties format) (if omitted, use defaults for all settings not listed here)")
+    @Parameter(names = {"--properties"}, description = "Properties file (java.util.Properties format) (if omitted, use defaults for all settings not listed here)")
     public String propertiesFile = null;
     @Parameter(names = {"-t","--tagname"}, description = "Tag name for resources (if omitted, use a string derived from current timestamp)")
     public String tagBaseName = "AwsVerticaDemo-" + System.currentTimeMillis();
     @Parameter(names = {"-d","--demomode"}, description = "Which demo mode to run (if omitted or invalid, demo spot instances and exit)")
     public String demoMode = null;
-    @Parameter(names = {"-P","--ports"}, description = "For proxy service, <local port>:<remote port> (if omitted or invalid, 35433:5433, or forward local port 35433 to remote port 5433)")
+    @Parameter(names = {"-P","--ports"}, description = "For proxy service, <local port>:<remote port> (implicitly sets proxy mode.  if omitted or invalid, no proxy service)")
     public String proxyPorts = null;
     @Parameter(names = {"-c","--communal-storage"}, description = "Communal storage location (S3 bucket) (if omitted or invalid, no default, error will occur with Eon mode. This setting is ignored for EE mode)")
     public String communalStorage = "";
-    @Parameter(names = {"-S","--secondary-subcluster"}, description = "Create a secondary subcluster with name:nodeCount:instanceType (if omitted or invalid, no default, no secondary subcluster will be created. This setting is ignored for EE mode)")
+    @Parameter(names = {"-n","--node"}, description = "Node to use to manage Vertica - primary subcluster node with SSH keys (-p/--primary is checked first. if omitted or invalid, no default, we will try to look up from AWS and error out if we can't find a node)")
+    public String sshNode = "";
+    @Parameter(names = {"-i","--identity"}, description = "SSH identity file (PEM private key, usually) (required in most cases, unless you set a default in the code)")
+    public String sshIdentityFile = "";
+    @Parameter(names = {"-p","--primary-subcluster"}, description = "CSV list of primary subcluster nodes as <id type>:node0,...,nodeX (where <id type> is what is in the CSV, supported: instanceId, privateIp. if omitted, try to discover from AWS API or implied from other settings like -n/--node")
+    public String primarySubcluster = "";
+    @Parameter(names = {"-s","--secondary-subcluster"}, description = "Create a secondary subcluster with name:nodeCount:instanceType (if omitted or invalid, no default, no secondary subcluster will be created. This setting is ignored for EE mode)")
     public String secondarySubcluster = "";
-    @Parameter(names = {"-s","--spot"}, description = "Create spot instances (default: on-demand)")
+    @Parameter(names = {"-S","--spot"}, description = "Create spot instances (default: on-demand)")
     public boolean spot = false;
     @Parameter(names = {"-e","--eonmode"}, description = "Create Eon mode DB (default: EE)")
     public boolean eonMode = false;

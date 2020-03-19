@@ -4,18 +4,37 @@ import com.jcraft.jsch.*;
 import org.apache.log4j.LogManager;
 import org.apache.log4j.Logger;
 
+import java.io.IOException;
 import java.io.InputStream;
+import java.net.InetAddress;
+import java.net.Socket;
+import java.net.UnknownHostException;
 import java.util.List;
 import java.util.Properties;
 
 public class SshUtil {
     final static Logger LOG = LogManager.getLogger(SshUtil.class);
 
+    // this is kind of generic but will put here anyways for now
+    public static boolean testConnection(String host, int port) {
+        boolean connectionStatus=false;
+
+        try {
+            Socket Skt = new Socket(host, port);
+            connectionStatus = true;
+            Skt.close();
+        } catch (UnknownHostException e) {
+        } catch (IOException e) {}
+
+        return connectionStatus;
+    }
+
     private Session getConnection(Properties params) throws Exception {
         int count = 3;
         while (count > 0) {
             try {
                 JSch jsch = new JSch();
+                LOG.warn("Connecting to "+params.getProperty("node")+" as "+params.getProperty("DBUSER"));
                 Session jschSession = jsch.getSession(params.getProperty("DBUSER"), params.getProperty("node"));
                 java.util.Properties config = new java.util.Properties();
                 // ignore host key since it changes for each new cloud instance
@@ -27,10 +46,12 @@ public class SshUtil {
                 jschSession.connect();
                 return jschSession;
             } catch (Exception e) {
-                e.printStackTrace();
+                //e.printStackTrace();
                 LOG.error(e.getMessage(), e);
+                LOG.error(params.toString());
                 LOG.error("Trying again in 5 seconds");
                 Thread.sleep(5000L);
+                count--;
             }
         }
         return null;
@@ -49,7 +70,7 @@ public class SshUtil {
     public int ssh(Properties params, String command) throws Exception {
         int exitStatus = -1;
         Session jschSession = getConnection(params);
-        LOG.info("SSH EXEC: "+command);
+        LOG.info(params.getProperty("node")+"|SSH EXEC: "+command);
         Channel channel=jschSession.openChannel("exec");
         ((ChannelExec)channel).setCommand(command);
         channel.setInputStream(null);
@@ -87,7 +108,7 @@ public class SshUtil {
     public String sshWithOutput(Properties params, String command) throws Exception {
         int exitStatus = -1;
         Session jschSession = getConnection(params);
-        LOG.info("SSH EXEC: "+command);
+        LOG.info(params.getProperty("node")+"|SSH EXEC with output: "+command);
         Channel channel=jschSession.openChannel("exec");
         ((ChannelExec)channel).setCommand(command);
         channel.setInputStream(null);
