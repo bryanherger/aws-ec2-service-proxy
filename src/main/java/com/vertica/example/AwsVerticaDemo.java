@@ -2,19 +2,19 @@ package com.vertica.example;
 
 import com.beust.jcommander.JCommander;
 import com.beust.jcommander.Parameter;
-import com.jcraft.jsch.*;
 import com.vertica.aws.AwsCloudProvider;
-import com.vertica.aws.AwsSpotInstanceManager;
 import com.vertica.aws.AwsVerticaService;
 import com.vertica.devops.AwsInstance;
 import com.vertica.devops.SshUtil;
 import org.apache.log4j.*;
-import org.apache.log4j.Logger;
 import org.quartz.*;
 import org.quartz.impl.StdSchedulerFactory;
 import software.amazon.awssdk.utils.StringUtils;
 
-import java.io.*;
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileReader;
+import java.io.FileWriter;
 import java.net.ServerSocket;
 import java.util.*;
 
@@ -73,14 +73,17 @@ public class AwsVerticaDemo {
         params.setProperty("awsRegion", awsRegion);
         params.setProperty("awsKeyPairName", awsKeyPairName);
         params.setProperty("awsS3Bucket", args.communalStorage);
+        params.setProperty("clusterSize", args.clusterSize);
         params.setProperty("DBPRIMARY", args.primarySubcluster);
         params.setProperty("DBSECONDARY", args.secondarySubcluster);
         params.setProperty("VERTICA_PEM_KEYFILE", (StringUtils.isEmpty(args.sshIdentityFile)?AwsVerticaDemo.VERTICA_PEM_KEYFILE:args.sshIdentityFile));
         params.setProperty("DBCONTROLNODE", args.sshNode);
-        params.setProperty("DBNAME", DBNAME);
+        params.setProperty("DBLICENSE", args.dbLicense);
+        params.setProperty("DBNAME", args.dbName);
+        params.setProperty("DBCLUSTER", args.dbCluster);
         params.setProperty("DBPORT", DBPORT);
-        params.setProperty("DBPASS", DBPASS);
-        params.setProperty("DBUSER", DBUSER);
+        params.setProperty("DBPASS", args.dbPassword);
+        params.setProperty("DBUSER", args.dbUser);
         params.setProperty("DBS3BUCKET",DBS3BUCKET);
         params.setProperty("DBDATADIR",DBDATADIR);
         if (args.tagBaseName != null) {
@@ -90,6 +93,34 @@ public class AwsVerticaDemo {
         if (args.propertiesFile != null) {
             LOG.info("Reading properties from "+args.propertiesFile);
             params.load(new FileReader(args.propertiesFile));
+        }
+        // if -t/--task (admintools style) flag, run the specified task
+        if (!StringUtils.isEmpty(args.dbTask)) {
+            params.setProperty("DBTASK", args.dbTask);
+            VerticaTasks vt = new VerticaTasks(params);
+            try {
+                if (args.dbTask.equalsIgnoreCase("create_db")) {
+                    vt.createDatabase(params);
+                }
+                if (args.dbTask.equalsIgnoreCase("revive_db")) {
+                    vt.reviveDatabase(params);
+                }
+                if (args.dbTask.equalsIgnoreCase("create_subcluster")) {
+                    vt.createSubcluster(params);
+                }
+                if (args.dbTask.equalsIgnoreCase("get_status")) {
+                    vt.getStatus(params);
+                }
+                if (args.dbTask.equalsIgnoreCase("remove_subcluster")) {
+                    vt.removeSubcluster(params);
+                }
+                if (args.dbTask.equalsIgnoreCase("stop_db")) {
+                    vt.stopDatabase(params);
+                }
+            } catch (Exception e) {
+                LOG.error(e.getMessage(), e);
+            }
+            System.exit(0);
         }
         if (args.proxyPorts != null && args.proxyPorts.contains(":")) {
             params.setProperty("DBPROXY", args.proxyPorts);
@@ -353,22 +384,36 @@ class Args {
     // in the help output from usage(), it looks like options are printed in order of long option name, regardless of order here
     @Parameter(names = {"--properties"}, description = "Properties file (java.util.Properties format) (if omitted, use defaults for all settings not listed here)")
     public String propertiesFile = null;
-    @Parameter(names = {"-t","--tagname"}, description = "Tag name for resources (if omitted, use a string derived from current timestamp)")
-    public String tagBaseName = "AwsVerticaDemo-" + System.currentTimeMillis();
-    @Parameter(names = {"-d","--demomode"}, description = "Which demo mode to run (if omitted or invalid, demo spot instances and exit)")
+    @Parameter(names = {"--tag"}, description = "Tag name for resources (if omitted, use AvsVerticaDemo)")
+    public String tagBaseName = "AwsVerticaDemo";
+    @Parameter(names = {"--demomode"}, description = "Which demo mode to run (if omitted or invalid, demo spot instances and exit)")
     public String demoMode = null;
+    @Parameter(names = {"-d","--database"}, description = "Vertica database name")
+    public String dbName = AwsVerticaDemo.DBNAME;
+    @Parameter(names = {"-c","--cluster"}, description = "Vertica database subcluster name")
+    public String dbCluster = "";
+    @Parameter(names = {"-u","--dbuser"}, description = "Vertica database user")
+    public String dbUser = AwsVerticaDemo.DBUSER;
+    @Parameter(names = {"-p","--dbpassword"}, description = "Vertica database password")
+    public String dbPassword = AwsVerticaDemo.DBPASS;
     @Parameter(names = {"-P","--ports"}, description = "For proxy service, <local port>:<remote port> (implicitly sets proxy mode.  if omitted or invalid, no proxy service)")
     public String proxyPorts = null;
-    @Parameter(names = {"-c","--communal-storage"}, description = "Communal storage location (S3 bucket) (if omitted or invalid, no default, error will occur with Eon mode. This setting is ignored for EE mode)")
+    @Parameter(names = {"--communal-storage"}, description = "Communal storage location (S3 bucket) (if omitted or invalid, no default, error will occur with Eon mode. This setting is ignored for EE mode)")
     public String communalStorage = "";
     @Parameter(names = {"-n","--node"}, description = "Node to use to manage Vertica - primary subcluster node with SSH keys (-p/--primary is checked first. if omitted or invalid, no default, we will try to look up from AWS and error out if we can't find a node)")
     public String sshNode = "";
     @Parameter(names = {"-i","--identity"}, description = "SSH identity file (PEM private key, usually) (required in most cases, unless you set a default in the code)")
     public String sshIdentityFile = "";
-    @Parameter(names = {"-p","--primary-subcluster"}, description = "CSV list of primary subcluster nodes as <id type>:node0,...,nodeX (where <id type> is what is in the CSV, supported: instanceId, privateIp. if omitted, try to discover from AWS API or implied from other settings like -n/--node")
+    @Parameter(names = {"-l","--license"}, description = "Vertica license file (default: use CE)")
+    public String dbLicense = "CE";
+    @Parameter(names = {"--primary-subcluster"}, description = "CSV list of primary subcluster nodes as <id type>:node0,...,nodeX (where <id type> is what is in the CSV, supported: instanceId, privateIp. if omitted, try to discover from AWS API or implied from other settings like -n/--node")
     public String primarySubcluster = "";
+    @Parameter(names = {"--clustersize"}, description = "Create nodes with name:nodeCount:instanceType (default: create 3x i3.4xlarge nodes named \"VerticaNode\")")
+    public String clusterSize = "VerticaNode:3:i3.4xlarge";
     @Parameter(names = {"-s","--secondary-subcluster"}, description = "Create a secondary subcluster with name:nodeCount:instanceType (if omitted or invalid, no default, no secondary subcluster will be created. This setting is ignored for EE mode)")
     public String secondarySubcluster = "";
+    @Parameter(names = {"-t","--task"}, description = "Create a secondary subcluster with name:nodeCount:instanceType (if omitted or invalid, no default, no secondary subcluster will be created. This setting is ignored for EE mode)")
+    public String dbTask = "";
     @Parameter(names = {"-S","--spot"}, description = "Create spot instances (default: on-demand)")
     public boolean spot = false;
     @Parameter(names = {"-e","--eonmode"}, description = "Create Eon mode DB (default: EE)")

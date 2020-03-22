@@ -100,9 +100,6 @@ public class AwsCloudProvider {
         params.setProperty("instanceTag", spotTagBaseName + "-SpotInstance");
         params.setProperty("serviceTag", spotTagBaseName + "-Vertica");
         params.setProperty("verticaDataTag", "subcluster::"+spotTagBaseName);
-        System.setProperty("aws.accessKeyId", params.getProperty("awsAccessKeyID"));
-        System.setProperty("aws.secretAccessKey", params.getProperty("awsSecretAccessKey"));
-        System.setProperty("aws.region", params.getProperty("awsRegion"));
         //Ec2Client ec2 = Ec2Client.builder().build();
         String verticaSecurityGroup = params.getProperty("verticaSecurityGroup");
         if (StringUtils.isEmpty(verticaSecurityGroup)) {

@@ -154,6 +154,7 @@ public class AwsVerticaService implements CloudServiceInterface {
         acp.tagInstances(toTag, "Name", "Vertica-"+scName);
         acp.configureInstances(targets, publicIps);
         String addHosts = String.join(",",hostIps);
+        targets.setProperty(scName+"-nodes",addHosts);  // for later use to remove these nodes
         LOG.info("Add subcluster "+scName+" with instances at "+addHosts);
         // install_vertica to add nodes
         //String dbuser = targets.getProperty("DBUSER");
@@ -215,7 +216,13 @@ public class AwsVerticaService implements CloudServiceInterface {
             LOG.error(e);
         }
         // remove nodes from cluster with install_vertica
-
+        String rmHosts = targets.getProperty(scName+"-nodes");
+        String updateVertica = "sudo /opt/vertica/sbin/update_vertica --remove-hosts "+rmHosts;
+        try {
+            ssh.ssh(targets, updateVertica);
+        } catch (Exception e) {
+            LOG.error(e);
+        }
         // ask the cloud provider class to terminate instances
 
         return false;
