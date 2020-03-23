@@ -20,6 +20,26 @@ public class VerticaTasks {
 
     public VerticaTasks(Properties params) { init(params); }
 
+    // determine the hostname or IP of any primary subcluster node.
+    private String getControlNode(Properties params) throws Exception {
+        String dbControlNode = params.getProperty("DBCONTROLNODE");
+        List<AwsInstance> aList = getInstancesByTag(params, "VerticaDatabase", params.getProperty("DBNAME"));
+        List<String> sirIds = new ArrayList<>();
+        List<String> instanceIds = new ArrayList<>();
+        for (AwsInstance a : aList) {
+            LOG.info("getStatus found:"+a);
+            dbControlNode = a.publicDns;
+            sirIds.add(a.sirId);
+            instanceIds.add(a.instanceId);
+        }
+        if (StringUtils.isEmpty(dbControlNode)) {
+            throw new Exception("Could not manage database: could not determine hostname of any node.");
+        }
+        params.setProperty("node", dbControlNode);
+        LOG.info("Control node: probably "+dbControlNode);
+        return dbControlNode;
+    }
+
     public void createDatabase(Properties params) throws Exception {
         LOG.info("Adding 'create' flag and using revive method");
         params.setProperty("createDb","true");
@@ -40,8 +60,59 @@ public class VerticaTasks {
 
     public void createSubcluster(Properties params) throws Exception {
         String dbControlNode = params.getProperty("DBCONTROLNODE");
+        List<AwsInstance> aList = getInstancesByTag(params, "VerticaDatabase", params.getProperty("DBNAME"));
+        List<String> sirIds = new ArrayList<>();
+        List<String> instanceIds = new ArrayList<>();
+        for (AwsInstance a : aList) {
+            LOG.info("getStatus found:"+a);
+            dbControlNode = a.publicDns;
+            sirIds.add(a.sirId);
+            instanceIds.add(a.instanceId);
+        }
+        if (StringUtils.isEmpty(dbControlNode)) {
+            throw new Exception("Could not manage database: could not determine hostname of any node.");
+        }
+        params.setProperty("node", dbControlNode);
+        LOG.info("Control node: probably "+dbControlNode);
         if (StringUtils.isEmpty(dbControlNode)) {
             throw new Exception("You need to define -n/--node parameter we can connect to get cluster info.");
+        }
+        AwsCloudProvider acp = new AwsCloudProvider(params);
+        acp.createVerticaNodes(params, "newcluster", 3, "i3.4xlarge");
+        LOG.info("First instance (out of "+acp.instances.size()+") of first cluster: "+acp.instances.get(0).toString());
+        String publicIp = acp.instances.get(0).publicDns;
+        String asimss = acp.checkState(params);
+        LOG.info("spot state: "+asimss);
+        List<String> ips = new ArrayList<>();
+        List<String> publicIps = new ArrayList<>();
+        for (String ip : asimss.split(";;")) {
+            String findDns[] = ip.split("\\|");
+            if (findDns.length == 5 && !StringUtils.isEmpty(findDns[4])) {
+                LOG.info("private IP: "+findDns[4]);
+                publicIps.add(findDns[3]);
+                ips.add(findDns[4]);
+            }
+        }
+        try { Thread.sleep(10000L); } catch (Exception e) { }
+        LOG.info("Using public IP or DNS: "+publicIp);
+        try {
+            params.setProperty("node", publicIp);
+            params.setProperty("allNodes", String.join(",", ips));
+            // configure instances
+            acp.configureInstances(params, publicIps);
+            // install and start DB
+            /* */
+            AwsVerticaService avs = new AwsVerticaService();
+            avs.installVertica(params);
+            // how fast can we add a subcluster?
+            LOG.error("Start adding ondemand-subcluster");
+            avs.eonAddSubcluster(params, "ondemand-subcluster", null);
+            LOG.error("Finish adding ondemand-subcluster");
+            // tests
+            avs.runQuery(params, "SELECT REBALANCE_SHARDS();");
+            avs.runQuery(params, "SELECT * FROM NODES;");
+        } catch (Exception e) {
+
         }
     }
 
@@ -53,10 +124,13 @@ public class VerticaTasks {
     }
 
     public void removeSubcluster(Properties params) throws Exception {
-        String dbControlNode = params.getProperty("DBCONTROLNODE");
+        String dbControlNode = getControlNode(params);
         if (StringUtils.isEmpty(dbControlNode)) {
             throw new Exception("You need to define -n/--node parameter we can connect to get cluster info.");
         }
+        // determine which subcluster we connected tom so we connect somewhere other than the subcluster we're removing!
+        // select subcluster_name, is_primary from current_session left join subclusters using (node_name);
+        
     }
 
     public void stopDatabase(Properties params) throws Exception {

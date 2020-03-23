@@ -369,7 +369,7 @@ public class AwsCloudProvider {
         SshUtil ssh = new SshUtil();
         // create LVM, format and mount under /vertica, fix permissions
         List<String> commands = new ArrayList<String>();
-        String node = params.getProperty("node");
+        String node = params.getProperty("node","");
         params.setProperty("node", instancePublicIp);
         // create /vertica as mount point for ephemeral volume(s) / LVM
         try { ssh.ssh(params, "sudo mkdir /vertica"); } catch (Exception e) { LOG.error("Exception in provisionInstanceDAS:"+e.getMessage(),e); }

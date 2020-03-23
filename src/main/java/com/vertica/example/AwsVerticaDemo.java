@@ -24,10 +24,12 @@ import static org.quartz.TriggerBuilder.newTrigger;
 
 public class AwsVerticaDemo {
     final static Logger LOG = LogManager.getLogger(AwsVerticaDemo.class);
-    private static String awsAccessKeyID = "0"
-            , awsSecretAccessKey = "0"
-            , awsRegion = "0";
-    private static String DBUSER = "X", DBPASS = "X", DBNAME = "X", DBPORT = "0";
+    private static String awsAccessKeyID = "X"
+            , awsSecretAccessKey = "X"
+            , awsRegion = "X", awsKeyPairName = "X"
+            , awsS3Bucket = null;
+    public static String DBUSER = "X", DBPASS = "X", DBNAME = "X", DBPORT = "5433", VERTICA_PEM_KEYFILE = "X"
+            , DBS3BUCKET = "s3://X/Y", DBDATADIR = "/X", DBPROXY = "35433:5433";
 
     public static void main(String[] argv) throws Exception {
         // parse command line args
@@ -383,7 +385,7 @@ class Args {
     // command line parsing: see http://jcommander.org/#_overview
     // in the help output from usage(), it looks like options are printed in order of long option name, regardless of order here
     @Parameter(names = {"--properties"}, description = "Properties file (java.util.Properties format) (if omitted, use defaults for all settings not listed here)")
-    public String propertiesFile = null;
+    public String propertiesFile = "d:\\temp\\github\\eonaws.properties";
     @Parameter(names = {"--tag"}, description = "Tag name for resources (if omitted, use AvsVerticaDemo)")
     public String tagBaseName = "AwsVerticaDemo";
     @Parameter(names = {"--demomode"}, description = "Which demo mode to run (if omitted or invalid, demo spot instances and exit)")
