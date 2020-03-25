@@ -4,8 +4,12 @@ import software.amazon.awssdk.services.ec2.model.Instance;
 import software.amazon.awssdk.utils.StringUtils;
 
 public class AwsInstance {
+    // AWS data
     public String instanceId, sirId, publicIp, publicDns, privateIp, privateDns, type, state;
-    boolean isSpot;
+    // Vertica data
+    public String nodeName, clusterName;
+    // AWS, Vertica
+    public boolean isSpot, isPrimary;
 
     public AwsInstance() {
 
@@ -29,7 +33,7 @@ public class AwsInstance {
 
     @Override
     public String toString() {
-        return this.instanceId+";"+this.publicIp+";"+this.privateIp;
+        return this.instanceId+";"+this.publicIp+";"+this.privateIp+";node:"+this.nodeName+";cluster:"+this.clusterName+";primary:"+isPrimary;
     }
 
 }

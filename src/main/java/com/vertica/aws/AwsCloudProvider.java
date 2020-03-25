@@ -1,8 +1,6 @@
 package com.vertica.aws;
 
-import com.fasterxml.jackson.databind.annotation.JsonAppend;
 import com.vertica.devops.AwsInstance;
-import com.vertica.devops.CloudProviderInterface;
 import com.vertica.devops.SshUtil;
 import org.apache.log4j.LogManager;
 import org.apache.log4j.Logger;
@@ -79,23 +77,7 @@ public class AwsCloudProvider {
         return groupName;
     }
 
-    public boolean createVerticaNodes(Properties targets, String clusterName, int instanceCount, String instanceType) {
-        boolean finalState = false;
-        List<String> instanceIds = null;
-        if (targets.containsKey("spotInstances")) {
-            instanceIds = createVerticaNodesSpot(targets, clusterName, instanceCount, instanceType);
-        } else {
-            instanceIds = createVerticaNodesOnDemand(targets, clusterName, instanceCount, instanceType);
-        }
-        /* TODO: we don't have the right info here to connect, though this is probably where we should configure
-        if (instanceIds != null) {
-            finalState = configureInstances(targets, instanceIds);
-        }
-         */
-        return finalState;
-    }
-
-    private List<String> createVerticaNodesSpot(Properties params, String clusterName, int instanceCount, String instanceType) {
+    public List<String> createVerticaNodes(Properties params, String clusterName, int instanceCount, String instanceType) {
         String spotTagBaseName = params.getProperty("tagBaseName", "AwsVerticaDemo");
         params.setProperty("instanceTag", spotTagBaseName + "-SpotInstance");
         params.setProperty("serviceTag", spotTagBaseName + "-Vertica");
@@ -200,11 +182,6 @@ public class AwsCloudProvider {
         // update instance data
         getInstancesById(spotInstanceIds);
         return new ArrayList<>(spotInstanceIds);
-    }
-
-    private List<String> createVerticaNodesOnDemand(Properties params, String clusterName, int instanceCount, String instanceType) {
-        // check for and revive hibernated instances, otherwise create new
-        return null;
     }
 
     /*@Deprecated

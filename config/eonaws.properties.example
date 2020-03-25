@@ -1,0 +1,21 @@
+# eonaws.properties: please fill in as many values as possible
+VERTICA_PEM_KEYFILE=d\:/temp/VerticaToolbox.pem
+DBPORT=5433
+DBDATADIR=/vertica
+DBSECONDARY=
+DBCONTROLNODE=
+DBPRIMARY=
+DBCLUSTER=
+clusterSize=VerticaNode\:1\:i3.4xlarge
+DBTASK=get_status
+DBLICENSE=CE
+DBNAME=VerticaDB
+DBUSER=dbadmin
+DBS3BUCKET=s3\://bucket/folder
+DBPASS=Vertica1
+awsRegion=us-east-1
+awsAccessKeyID=
+tagBaseName=AwsVerticaDemo
+awsS3Bucket=
+awsKeyPairName=
+awsSecretAccessKey=
