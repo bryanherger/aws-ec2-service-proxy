@@ -11,7 +11,7 @@ import java.sql.*;
 import java.util.*;
 
 // BH: creating an interface seemed like a good idea at the time, but I don't seem to be using it here
-public class AwsVerticaService {
+public class AwsVerticaService implements CloudServiceInterface {
     final static Logger LOG = LogManager.getLogger(AwsVerticaService.class);
     public static String aliveQuery = "select /*+label(proxytestquery)*/ version();\n";
     public static String activeQuery = "select /*+label(proxytestquery)*/ * from query_requests where request_label <> 'proxytestquery' AND request <> 'select 1' AND (end_timestamp > (current_timestamp - interval '15 minutes') or end_timestamp is null) order by end_timestamp desc limit 25;";
@@ -43,6 +43,7 @@ public class AwsVerticaService {
         return null;
     }
 
+    @Override
     public boolean createServices(Properties targets) {
         // create or revive (from hibernate) EE, or create or revive (from S3) Eon mode
         if (targets.containsKey("eonMode")) {
@@ -227,6 +228,7 @@ public class AwsVerticaService {
         return false;
     }
 
+    @Override
     public String checkState(Properties targets) {
         boolean c1 = this.runQuery(targets, aliveQuery);
         boolean c2 = this.runQuery(targets, activeQuery);
@@ -236,10 +238,12 @@ public class AwsVerticaService {
         return null;
     }
 
+    @Override
     public boolean alterServices(Properties targets) {
         return false;
     }
 
+    @Override
     public boolean destroyServices(Properties targets) {
         // call appropriate functions to flush catalog and data...
         String stopDb = "sudo -u dbadmin /opt/vertica/bin/admintools -t stop_db -d "+targets.getProperty("DBNAME")+" -p "+targets.getProperty("DBPASS");

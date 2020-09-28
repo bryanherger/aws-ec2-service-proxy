@@ -3,12 +3,16 @@
 package com.vertica.example;
 
 import com.vertica.aws.AwsCloudProvider;
+import com.vertica.aws.AwsUtil;
 import com.vertica.aws.Util;
+import com.vertica.aws.VerticaUtil;
 import org.apache.log4j.LogManager;
 import org.apache.log4j.Logger;
 
 import java.io.*;
 import java.net.Socket;
+import java.util.Collections;
+import java.util.List;
 import java.util.Properties;
 
 /**

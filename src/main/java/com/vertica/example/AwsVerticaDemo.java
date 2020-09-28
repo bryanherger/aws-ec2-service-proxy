@@ -69,35 +69,35 @@ public class AwsVerticaDemo {
         } else {
             LOG.error("!V using EE mode DB");
         }
+        // set defaults
+        params.setProperty("awsAccessKeyID", awsAccessKeyID);
+        params.setProperty("awsSecretAccessKey", awsSecretAccessKey);
+        params.setProperty("awsRegion", awsRegion);
+        params.setProperty("awsKeyPairName", awsKeyPairName);
+        params.setProperty("awsS3Bucket", args.communalStorage);
+        params.setProperty("clusterSize", args.clusterSize);
+        params.setProperty("DBPRIMARY", args.primarySubcluster);
+        params.setProperty("DBSECONDARY", args.secondarySubcluster);
+        params.setProperty("VERTICA_PEM_KEYFILE", (StringUtils.isEmpty(args.sshIdentityFile)?AwsVerticaDemo.VERTICA_PEM_KEYFILE:args.sshIdentityFile));
+        params.setProperty("DBCONTROLNODE", args.sshNode);
+        params.setProperty("DBLICENSE", args.dbLicense);
+        params.setProperty("DBNAME", args.dbName);
+        params.setProperty("DBCLUSTER", args.dbCluster);
+        params.setProperty("DBPORT", DBPORT);
+        params.setProperty("DBPASS", args.dbPassword);
+        params.setProperty("DBUSER", args.dbUser);
+        params.setProperty("DBS3BUCKET",DBS3BUCKET);
+        params.setProperty("DBDATADIR",DBDATADIR);
+        if (args.tagBaseName != null) {
+            params.setProperty("tagBaseName",args.tagBaseName);
+        }
         // load config file if specified and override
         if (args.propertiesFile != null) {
             LOG.info("Reading properties from "+args.propertiesFile);
             params.load(new FileReader(args.propertiesFile));
         }
-        // set from command line
-        /*params.setProperty("awsAccessKeyID", awsAccessKeyID);
-        params.setProperty("awsSecretAccessKey", awsSecretAccessKey);
-        params.setProperty("awsRegion", awsRegion);
-        params.setProperty("awsKeyPairName", awsKeyPairName);*/
-        if (StringUtils.isNotBlank(args.communalStorage)) { params.setProperty("awsS3Bucket", args.communalStorage); }
-        if (StringUtils.isNotBlank(args.clusterSize)) { params.setProperty("clusterSize", args.clusterSize); }
-        if (StringUtils.isNotBlank(args.primarySubcluster)) { params.setProperty("DBPRIMARY", args.primarySubcluster); }
-        if (StringUtils.isNotBlank(args.secondarySubcluster)) { params.setProperty("DBSECONDARY", args.secondarySubcluster); }
-        if (StringUtils.isNotBlank(args.sshIdentityFile)) { params.setProperty("VERTICA_PEM_KEYFILE", args.sshIdentityFile); }
-        if (StringUtils.isNotBlank(args.sshNode)) { params.setProperty("DBCONTROLNODE", args.sshNode); }
-        if (StringUtils.isNotBlank(args.dbLicense)) { params.setProperty("DBLICENSE", args.dbLicense); }
-        if (StringUtils.isNotBlank(args.dbName)) { params.setProperty("DBNAME", args.dbName); }
-        if (StringUtils.isNotBlank(args.dbCluster)) { params.setProperty("DBCLUSTER", args.dbCluster); }
-        if (StringUtils.isNotBlank(args.dbPassword)) { params.setProperty("DBPASS", args.dbPassword); }
-        if (StringUtils.isNotBlank(args.dbUser)) { params.setProperty("DBUSER", args.dbUser); }
-        //params.setProperty("DBPORT", DBPORT);
-        //params.setProperty("DBS3BUCKET",DBS3BUCKET);
-        //params.setProperty("DBDATADIR",DBDATADIR);
-        if (StringUtils.isNotBlank(args.tagBaseName)) {
-            params.setProperty("tagBaseName",args.tagBaseName);
-        }
         // if -t/--task (admintools style) flag, run the specified task
-        if (StringUtils.isNotBlank(args.dbTask)) {
+        if (!StringUtils.isEmpty(args.dbTask)) {
             params.setProperty("DBTASK", args.dbTask);
             VerticaTasks vt = new VerticaTasks(params);
             try {
@@ -111,11 +111,7 @@ public class AwsVerticaDemo {
                     vt.createSubcluster(params);
                 }
                 if (args.dbTask.equalsIgnoreCase("get_status")) {
-                    //vt.getStatus(params);
-                    // do nothing here since we'll always print status at end of run.
-                }
-                if (args.dbTask.equalsIgnoreCase("db_proxy")) {
-                    vt.proxyServer(params);
+                    vt.getStatus(params);
                 }
                 if (args.dbTask.equalsIgnoreCase("remove_subcluster")) {
                     vt.removeSubcluster(params);
@@ -123,7 +119,6 @@ public class AwsVerticaDemo {
                 if (args.dbTask.equalsIgnoreCase("stop_db")) {
                     vt.stopDatabase(params);
                 }
-                vt.getStatus(params);
             } catch (Exception e) {
                 LOG.error(e.getMessage(), e);
             }
@@ -152,7 +147,7 @@ public class AwsVerticaDemo {
         acp.init(params);
         params.setProperty("serviceTag","VerticaSpotDemo");
         //acp.createInstances(params);
-        acp.createVerticaNodes(params, "default", 3, /*"c5.large"*/"i3.large");
+        acp.createVerticaNodes(params, "default", 3, /*"c5.large"*/"i3.4xlarge");
         LOG.info("First instance (out of "+acp.instances.size()+") of first cluster: "+acp.instances.get(0).toString());
         String publicIp = acp.instances.get(0).publicDns;
         String asimss = acp.checkState(params);
@@ -389,20 +384,20 @@ public class AwsVerticaDemo {
 class Args {
     // command line parsing: see http://jcommander.org/#_overview
     // in the help output from usage(), it looks like options are printed in order of long option name, regardless of order here
-    @Parameter(names = {"--properties"}, description = "Properties file (java.util.Properties format) (if omitted, use command line settings, or fall back to defaults)")
+    @Parameter(names = {"--properties"}, description = "Properties file (java.util.Properties format) (if omitted, use defaults for all settings not listed here)")
     public String propertiesFile = "d:\\temp\\github\\eonaws.properties";
     @Parameter(names = {"--tag"}, description = "Tag name for resources (if omitted, use AvsVerticaDemo)")
-    public String tagBaseName = "";
+    public String tagBaseName = "AwsVerticaDemo";
     @Parameter(names = {"--demomode"}, description = "Which demo mode to run (if omitted or invalid, demo spot instances and exit)")
     public String demoMode = null;
     @Parameter(names = {"-d","--database"}, description = "Vertica database name")
-    public String dbName = "";
+    public String dbName = AwsVerticaDemo.DBNAME;
     @Parameter(names = {"-c","--cluster"}, description = "Vertica database subcluster name")
     public String dbCluster = "";
     @Parameter(names = {"-u","--dbuser"}, description = "Vertica database user")
-    public String dbUser = "";
+    public String dbUser = AwsVerticaDemo.DBUSER;
     @Parameter(names = {"-p","--dbpassword"}, description = "Vertica database password")
-    public String dbPassword = "";
+    public String dbPassword = AwsVerticaDemo.DBPASS;
     @Parameter(names = {"-P","--ports"}, description = "For proxy service, <local port>:<remote port> (implicitly sets proxy mode.  if omitted or invalid, no proxy service)")
     public String proxyPorts = null;
     @Parameter(names = {"--communal-storage"}, description = "Communal storage location (S3 bucket) (if omitted or invalid, no default, error will occur with Eon mode. This setting is ignored for EE mode)")
@@ -415,16 +410,16 @@ class Args {
     public String dbLicense = "CE";
     @Parameter(names = {"--primary-subcluster"}, description = "CSV list of primary subcluster nodes as <id type>:node0,...,nodeX (where <id type> is what is in the CSV, supported: instanceId, privateIp. if omitted, try to discover from AWS API or implied from other settings like -n/--node")
     public String primarySubcluster = "";
-    @Parameter(names = {"--clustersize"}, description = "Create nodes with name:nodeCount:instanceType (default: create 1x i3.large nodes named \"VerticaNode\")")
-    public String clusterSize = "";
-    @Parameter(names = {"-s","--secondary-subcluster"}, description = "Create a secondary subcluster with name:nodeCount:instanceType (if omitted or invalid, no default, no secondary subcluster will be created, may error out)")
+    @Parameter(names = {"--clustersize"}, description = "Create nodes with name:nodeCount:instanceType (default: create 3x i3.4xlarge nodes named \"VerticaNode\")")
+    public String clusterSize = "VerticaNode:3:i3.4xlarge";
+    @Parameter(names = {"-s","--secondary-subcluster"}, description = "Create a secondary subcluster with name:nodeCount:instanceType (if omitted or invalid, no default, no secondary subcluster will be created. This setting is ignored for EE mode)")
     public String secondarySubcluster = "";
-    @Parameter(names = {"-t","--task"}, description = "Run a task: create_db,revive_db,create_subcluster,get_status,db_proxy,remove_subcluster,stop_db")
+    @Parameter(names = {"-t","--task"}, description = "Create a secondary subcluster with name:nodeCount:instanceType (if omitted or invalid, no default, no secondary subcluster will be created. This setting is ignored for EE mode)")
     public String dbTask = "";
     @Parameter(names = {"-S","--spot"}, description = "Create spot instances (default: on-demand)")
     public boolean spot = false;
     @Parameter(names = {"-e","--eonmode"}, description = "Create Eon mode DB")
     public boolean eonMode = true;
-    @Parameter(names = {"-h","-?","--help"}, help = true, description = "Print this message")
+    @Parameter(names = {"-?","--help"}, help = true, description = "Print this message")
     public boolean help;
 }
